@@ -1,0 +1,17 @@
+{
+  "bot_name": "Discat Guard",
+  "online": false,
+  "process_id": null,
+  "started_at": null,
+  "last_ready_at": null,
+  "status_updated_at": null,
+  "uptime_seconds": 0,
+  "user": null,
+  "latency_ms": null,
+  "guild_count": 0,
+  "member_count": 0,
+  "commands_enabled": false,
+  "security_log_enabled": true,
+  "security_log_path": "database/security_events.jsonl",
+  "guilds": []
+}
