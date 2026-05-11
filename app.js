@@ -419,11 +419,25 @@ function configuredGuardApiBase() {
   if (configuredApiBase && validateGuardApiBase(configuredApiBase)) {
     return defaultGuardApiBase();
   }
+  if (configuredApiBase && isWrongPublicGuardApiBase(configuredApiBase)) {
+    return defaultGuardApiBase();
+  }
   return configuredApiBase ?? defaultGuardApiBase();
 }
 
 function defaultGuardApiBase() {
   return isLocalDashboardOrigin() ? GUARD_DEFAULT_API_BASE_URL : GUARD_PUBLIC_API_BASE_URL;
+}
+
+function isWrongPublicGuardApiBase(value) {
+  if (isLocalDashboardOrigin()) {
+    return false;
+  }
+  try {
+    return new URL(value).hostname === "api.xero-x.me";
+  } catch {
+    return false;
+  }
 }
 
 function cleanGuardApiBase(value) {
