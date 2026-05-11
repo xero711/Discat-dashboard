@@ -2355,6 +2355,7 @@ function normalizeGuardVerificationOptions(payload) {
             name: String(role?.name ?? "unknown"),
             position: Number(role?.position ?? 0),
             managed: Boolean(role?.managed),
+            can_assign: role?.can_assign !== false,
           })).filter((role) => role.id)
         : [],
     })).filter((guild) => guild.id),
@@ -2701,6 +2702,7 @@ function renderGuardVerification() {
         </div>
       </form>
       ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネルとロール候補の取得にはOwner Keyが必要です: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
+      ${renderGuardVerificationServerSettings(guilds)}
     </section>
     <section class="guard-panel-grid">
       <div class="settings-panel">
@@ -2749,10 +2751,13 @@ function renderGuardVerificationGuildField(guilds, selectedGuildId) {
 function renderGuardVerificationChannelField(field, label, selectedValue, guild) {
   const channels = guild?.text_channels ?? [];
   if (!channels.length) {
+    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "候補を取得すると選択できます";
     return `
       <label class="field">
         <span>${escapeHtml(label)}</span>
-        <input type="text" data-guard-verification-field="${escapeAttribute(field)}" value="${escapeAttribute(selectedValue)}" placeholder="チャンネルID" />
+        <select data-guard-verification-field="${escapeAttribute(field)}" disabled>
+          <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
+        </select>
       </label>
     `;
   }
@@ -2770,10 +2775,13 @@ function renderGuardVerificationChannelField(field, label, selectedValue, guild)
 function renderGuardVerificationRoleField(selectedValue, guild) {
   const roles = guild?.roles ?? [];
   if (!roles.length) {
+    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "候補を取得すると選択できます";
     return `
       <label class="field">
-        <span>認証後ロールID</span>
-        <input type="text" data-guard-verification-field="role_id" value="${escapeAttribute(selectedValue)}" placeholder="ロールID" />
+        <span>認証後に付与するロール</span>
+        <select data-guard-verification-field="role_id" disabled>
+          <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
+        </select>
       </label>
     `;
   }
@@ -2782,10 +2790,52 @@ function renderGuardVerificationRoleField(selectedValue, guild) {
       <span>認証後に付与するロール</span>
       <select data-guard-verification-field="role_id">
         <option value="">未設定</option>
-        ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === selectedValue ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
+        ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === selectedValue ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : role.can_assign ? "" : "（付与不可）"}</option>`).join("")}
       </select>
     </label>
   `;
+}
+
+function renderGuardVerificationServerSettings(guilds) {
+  const rows = guilds.map((guild) => {
+    const settings = state.guard.verificationSettings.find((item) => item.guild_id === guild.id);
+    const active = state.guard.verificationForm.guild_id === guild.id;
+    const configured = Boolean(settings?.button_channel_id && settings?.log_channel_id && settings?.role_id);
+    const statusText = configured ? (settings.enabled ? "有効" : "無効") : "未設定";
+    return `
+      <article class="guard-server-row ${active ? "guard-server-row--active" : ""}">
+        <span class="guild-row__icon guild-row__icon--fallback">${escapeHtml(guild.name.slice(0, 1))}</span>
+        <span>
+          <strong>${escapeHtml(guild.name)}</strong>
+          <small>${escapeHtml(statusText)} / ボタン ${escapeHtml(channelNameForGuard(guild, settings?.button_channel_id))} / ログ ${escapeHtml(channelNameForGuard(guild, settings?.log_channel_id))} / ロール ${escapeHtml(roleNameForGuard(guild, settings?.role_id))}</small>
+        </span>
+        <button class="icon-button icon-button--ghost" type="button" data-action="guard-edit-verification-guild" data-guard-guild-id="${escapeAttribute(guild.id)}">
+          ${icon("settings")}<span>${active ? "編集中" : "編集"}</span>
+        </button>
+      </article>
+    `;
+  });
+  return `
+    <div class="guard-server-list guard-verification-server-list">
+      ${rows.length ? rows.join("") : renderGuardVerificationEmpty("Owner Keyを入力して候補を取得すると、サーバーごとに認証設定を編集できます。")}
+    </div>
+  `;
+}
+
+function channelNameForGuard(guild, channelId) {
+  if (!channelId) {
+    return "未設定";
+  }
+  const channel = (guild?.text_channels ?? []).find((item) => item.id === channelId);
+  return channel ? `#${channel.name}` : String(channelId);
+}
+
+function roleNameForGuard(guild, roleId) {
+  if (!roleId) {
+    return "未設定";
+  }
+  const role = (guild?.roles ?? []).find((item) => item.id === roleId);
+  return role ? `@${role.name}` : String(roleId);
 }
 
 function renderGuardVerificationRecord(record) {
@@ -3041,7 +3091,14 @@ async function saveGuardVerificationSettings() {
       ...state.guard.verificationSettings.filter((item) => item.guild_id !== form.guild_id),
       ...nextSettings,
     ];
-    state.guard.verificationMessage = "認証設定を保存しました。Discord内の /verify でも同じ設定を設置できます。";
+    const panel = payload?.panel;
+    if (panel?.status === "published") {
+      state.guard.verificationMessage = "認証設定を保存し、選択チャンネルへ認証ボタンを設置しました。";
+    } else if (panel?.message) {
+      state.guard.verificationMessage = `認証設定は保存しました。認証ボタンの設置は未完了です: ${panel.message}`;
+    } else {
+      state.guard.verificationMessage = "認証設定を保存しました。";
+    }
     await loadGuardData({ silent: true });
   } catch (error) {
     state.guard.verificationError = error instanceof Error ? error.message : String(error);
@@ -4623,6 +4680,13 @@ function handleClick(event) {
       void loadGuardVerificationOptions();
     } else if (action === "guard-load-private-records") {
       void loadGuardVerificationPrivateRecords();
+    } else if (action === "guard-edit-verification-guild") {
+      const guildId = actionEl.dataset.guardGuildId;
+      if (guildId) {
+        applyGuardVerificationSettingsForGuild(guildId);
+        state.guard.privateRecords = [];
+        render();
+      }
     } else if (action === "login") {
       if (loginBlocked()) {
         state.security.error =
