@@ -434,7 +434,7 @@ function isWrongPublicOneApiBase(value) {
     if (window.location.protocol === "https:" && url.protocol !== "https:") {
       return true;
     }
-    return ["127.0.0.1", "localhost", "::1", window.location.hostname].includes(url.hostname);
+    return url.hostname !== new URL(PUBLIC_API_BASE_URL).hostname;
   } catch {
     return true;
   }
