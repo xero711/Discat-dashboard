@@ -158,12 +158,13 @@ const PRODUCT_META = {
   },
 };
 
-const GUARD_VIEWS = [
-  { id: "overview", label: "概要", description: "稼働状況と監視状態", icon: "shield" },
-  { id: "servers", label: "サーバー", description: "参加サーバー一覧", icon: "server" },
-  { id: "events", label: "監査ログ", description: "セキュリティイベント", icon: "activity" },
-  { id: "verification", label: "認証", description: "認証ボタンと重複検知", icon: "lock" },
-  { id: "settings", label: "API設定", description: "接続先と取得状態", icon: "settings" },
+const GUARD_FEATURES = [
+  {
+    id: "verification",
+    label: "認証",
+    description: "認証ボタン、認証ログ、付与ロール、同一端末の別アカウント検知を設定します。",
+    icon: "lock",
+  },
 ];
 
 const GUARD_FEATURE_ROWS = [
@@ -252,7 +253,6 @@ const state = {
   },
   pendingPageId: null,
   guard: {
-    activeView: "overview",
     apiBase: configuredGuardApiBase(),
     apiError: null,
     health: null,
@@ -491,11 +491,12 @@ function updateDocumentForProduct() {
   const product = PRODUCT_META[state.activeProduct] ?? PRODUCT_META.one;
   document.title = `${product.label} Dashboard`;
   setMetaContent("description", product.id === "guard" ? "Discat Guard のセキュリティダッシュボード" : "Discat Botの導入、設定はこちら");
-  setMetaContent("theme-color", product.id === "guard" ? "#1c1834" : "#21183f");
+  setMetaContent("theme-color", product.id === "guard" ? "#d8f9ff" : "#21183f");
   setMetaContent("og:site_name", product.label, "property");
   setMetaContent("og:title", `${product.label} Dashboard`, "property");
   setMetaContent("twitter:title", `${product.label} Dashboard`);
   setSiteIcon(product.id === "guard" ? GUARD_ICON_URL : "./assets/favicon.ico?v=20260510-site-icon-1");
+  document.body.classList.toggle("body--guard", product.id === "guard");
 }
 
 function setMetaContent(name, content, attr = "name") {
@@ -1784,8 +1785,12 @@ function defaultServerPageId() {
 function render() {
   stopPlaylistProgressLoop();
   const serviceOnly = state.activeProduct === "one" && serviceStatusOnlyActive();
+  const shellClasses = ["app-shell", `app-shell--${state.activeProduct}`];
+  if (state.pendingPageId && hasUnsavedChanges()) {
+    shellClasses.push("app-shell--with-unsaved-bar");
+  }
   root.innerHTML = `
-    <div class="app-shell ${state.pendingPageId && hasUnsavedChanges() ? "app-shell--with-unsaved-bar" : ""}">
+    <div class="${shellClasses.join(" ")}">
       ${renderTopbar()}
       <main class="dashboard">
         ${renderMainContent()}
@@ -1834,19 +1839,14 @@ function renderTopbar() {
       </div>
       <nav class="topbar__actions" aria-label="Dashboard actions">
         ${renderProductSwitcher()}
-        <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
-          ${icon("external")}<span>サポートサーバー</span>
-        </a>
         ${
           state.activeProduct === "guard"
-            ? `
-              <button class="icon-button" type="button" data-action="guard-refresh" ${state.guard.loading ? "disabled" : ""}>
-                ${icon("refresh")}<span>${state.guard.loading ? "更新中" : "再読込"}</span>
-              </button>
-              <span class="source-chip ${guardStatusClass()}">${escapeHtml(guardSourceText())}</span>
-            `
+            ? ""
             : state.user
             ? `
+              <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
+                ${icon("external")}<span>サポートサーバー</span>
+              </a>
               <button class="icon-button" type="button" data-action="refresh-account" ${state.loading ? "disabled" : ""}>
                 ${icon("refresh")}<span>再読込</span>
               </button>
@@ -1863,6 +1863,9 @@ function renderTopbar() {
               </button>
             `
             : `
+              <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
+                ${icon("external")}<span>サポートサーバー</span>
+              </a>
               <button class="icon-button icon-button--primary" type="button" data-action="login" ${loginBlocked() ? "disabled" : ""}>
                 ${icon(loginState.icon)}<span>${loginState.label}</span>
               </button>
@@ -2319,31 +2322,17 @@ function guardStatusClass() {
 }
 
 function renderGuardDashboard() {
-  const activeView = GUARD_VIEWS.find((view) => view.id === state.guard.activeView) ?? GUARD_VIEWS[0];
   return `
-    <div class="dashboard-grid dashboard-grid--guard">
-      ${renderGuardStatusRail()}
+    <div class="dashboard-grid dashboard-grid--guard dashboard-grid--guard-auth">
       <div class="workspace workspace--guard">
-        <nav class="dashboard-mode-nav dashboard-mode-nav--guard" aria-label="Guard dashboard view">
-          ${GUARD_VIEWS.map((view) => `
-            <button class="dashboard-mode-nav__item ${activeView.id === view.id ? "dashboard-mode-nav__item--active" : ""}" type="button" data-guard-view="${view.id}" aria-current="${activeView.id === view.id ? "page" : "false"}">
-              ${icon(view.icon)}<span>${escapeHtml(view.label)}</span>
-            </button>
-          `).join("")}
-        </nav>
-        <div class="workspace-layout workspace-layout--guard">
-          <aside class="function-sidebar" aria-label="Guard機能メニュー">
-            <div class="function-sidebar__label">Guard</div>
-            <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="Guardページ">
-              ${GUARD_VIEWS.map(renderGuardNavItem).join("")}
-            </div>
-          </aside>
+        <div class="workspace-layout workspace-layout--guard workspace-layout--guard-auth">
           <div class="workspace-main">
             <div class="workspace__title">
-              <span>${escapeHtml(activeView.description)}</span>
-              <h2>${escapeHtml(activeView.label)}</h2>
+              <span>Guardで使う機能</span>
+              <h2>機能一覧</h2>
             </div>
-            ${renderGuardContent()}
+            ${renderGuardFeatureList()}
+            ${renderGuardVerification()}
           </div>
         </div>
       </div>
@@ -2351,18 +2340,25 @@ function renderGuardDashboard() {
   `;
 }
 
-function renderGuardNavItem(view) {
-  const active = (GUARD_VIEWS.find((item) => item.id === state.guard.activeView) ?? GUARD_VIEWS[0]).id === view.id;
+function renderGuardFeatureList() {
   return `
-    <div class="function-nav-entry">
-      <button class="function-nav-item ${active ? "function-nav-item--active" : ""}" type="button" role="tab" aria-selected="${active}" data-guard-view="${view.id}">
-        ${icon(view.icon)}
-        <span class="function-nav-item__body">
-          <strong>${escapeHtml(view.label)}</strong>
-          <span>${escapeHtml(view.description)}</span>
-        </span>
-      </button>
-    </div>
+    <section class="settings-panel guard-feature-index" aria-label="Guard機能一覧">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("shield")}<h2>機能一覧</h2></div>
+        <span class="feature-status feature-status--on">${GUARD_FEATURES.length}件</span>
+      </div>
+      <div class="guard-feature-index__list">
+        ${GUARD_FEATURES.map((feature) => `
+          <a class="guard-feature-index__item" href="#guard-verification-settings">
+            <span class="guard-feature-index__icon">${icon(feature.icon)}</span>
+            <span>
+              <strong>${escapeHtml(feature.label)}</strong>
+              <small>${escapeHtml(feature.description)}</small>
+            </span>
+          </a>
+        `).join("")}
+      </div>
+    </section>
   `;
 }
 
@@ -2397,19 +2393,7 @@ function renderGuardStatusRail() {
 }
 
 function renderGuardContent() {
-  if (state.guard.activeView === "servers") {
-    return renderGuardServers();
-  }
-  if (state.guard.activeView === "events") {
-    return renderGuardEvents();
-  }
-  if (state.guard.activeView === "verification") {
-    return renderGuardVerification();
-  }
-  if (state.guard.activeView === "settings") {
-    return renderGuardSettings();
-  }
-  return renderGuardOverview();
+  return renderGuardVerification();
 }
 
 function renderGuardOverview() {
@@ -2563,7 +2547,7 @@ function renderGuardVerification() {
   const privateRecords = guardVerificationRecordsForGuild(state.guard.privateRecords);
   return `
     ${renderGuardApiNotice()}
-    <section class="settings-panel guard-verification-panel">
+    <section class="settings-panel guard-verification-panel" id="guard-verification-settings">
       <div class="settings-panel__header">
         <div class="panel-heading">${icon("lock")}<h2>認証設定</h2></div>
         <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "API接続済み" : "API未接続"}</span>
@@ -2577,6 +2561,10 @@ function renderGuardVerification() {
         <label class="field">
           <span>Owner Key</span>
           <input type="password" autocomplete="off" data-guard-verification-field="owner_key" value="${escapeAttribute(state.guard.ownerKey)}" placeholder="config.py の VERIFICATION_OWNER_KEY" />
+        </label>
+        <label class="field">
+          <span>API Base URL</span>
+          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(state.guard.apiBase || "")}" placeholder="http://127.0.0.1:8788" />
         </label>
         ${renderGuardVerificationGuildField(guilds, form.guild_id)}
         ${renderGuardVerificationChannelField("button_channel_id", "認証ボタン配置チャンネル", form.button_channel_id, selectedGuild)}
@@ -2595,6 +2583,9 @@ function renderGuardVerification() {
         <div class="feature-card__actions guard-verification-actions">
           <button class="icon-button icon-button--primary" type="submit" ${state.guard.verificationSaving || !state.guard.apiBase ? "disabled" : ""}>
             ${icon("save")}<span>${state.guard.verificationSaving ? "保存中" : "保存"}</span>
+          </button>
+          <button class="icon-button icon-button--ghost" type="button" data-action="guard-save-api">
+            ${icon("link")}<span>接続</span>
           </button>
           <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-verification-options" ${!state.guard.ownerKey || !state.guard.apiBase ? "disabled" : ""}>
             ${icon("refresh")}<span>候補を取得</span>
@@ -4502,6 +4493,8 @@ function handleClick(event) {
       void activateProduct(actionEl.dataset.product);
     } else if (action === "guard-refresh") {
       void loadGuardData();
+    } else if (action === "guard-save-api") {
+      saveGuardApiBase();
     } else if (action === "guard-clear-api") {
       clearGuardApiBase();
     } else if (action === "guard-load-verification-options") {
@@ -4606,14 +4599,6 @@ function handleClick(event) {
       updateDirtyState("features");
       render();
     }
-    return;
-  }
-
-  const guardViewEl = target.closest("[data-guard-view]");
-  if (guardViewEl) {
-    const viewId = guardViewEl.dataset.guardView;
-    state.guard.activeView = GUARD_VIEWS.some((view) => view.id === viewId) ? viewId : "overview";
-    render();
     return;
   }
 

@@ -63,6 +63,20 @@ body::before {
   content: "";
 }
 
+body.body--guard {
+  color-scheme: light;
+  background:
+    linear-gradient(135deg, rgba(92, 219, 247, 0.42), transparent 35%),
+    linear-gradient(225deg, rgba(187, 247, 255, 0.72), transparent 38%),
+    linear-gradient(180deg, #f3fdff 0%, #ddf8ff 52%, #c8edf8 100%);
+}
+
+body.body--guard::before {
+  background:
+    linear-gradient(115deg, transparent 0 18%, rgba(67, 200, 230, 0.26) 18% 19%, transparent 19% 100%),
+    linear-gradient(155deg, transparent 0 48%, rgba(9, 143, 181, 0.14) 48% 49%, transparent 49% 100%);
+}
+
 button,
 input,
 select {
@@ -89,6 +103,28 @@ button:disabled {
 
 .app-shell--with-unsaved-bar {
   padding-bottom: 132px;
+}
+
+.app-shell--guard {
+  color-scheme: light;
+  color: var(--text);
+  --bg: #eefcff;
+  --panel: rgba(248, 253, 255, 0.94);
+  --panel-strong: rgba(255, 255, 255, 0.98);
+  --panel-soft: rgba(28, 173, 210, 0.08);
+  --border: rgba(11, 127, 161, 0.22);
+  --text: #143f4e;
+  --text-strong: #052b38;
+  --muted: #326979;
+  --muted-2: #5d8794;
+  --pink: #65daf1;
+  --purple: #1198bd;
+  --cyan: #14b6da;
+  --amber: #9a6500;
+  --danger: #c43d5a;
+  --success: #0d7f60;
+  --line: rgba(11, 127, 161, 0.12);
+  --shadow: 0 18px 48px rgba(9, 90, 116, 0.14);
 }
 
 .topbar {
@@ -2516,8 +2552,146 @@ input[type="checkbox"]:checked::before {
   color: var(--danger);
 }
 
+.app-shell--guard .brand__mascot {
+  border-color: rgba(20, 182, 218, 0.44);
+  box-shadow:
+    0 0 0 4px rgba(101, 218, 241, 0.22),
+    0 10px 26px rgba(9, 90, 116, 0.14);
+}
+
+.app-shell--guard .icon-button {
+  border-color: rgba(11, 127, 161, 0.24);
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-strong);
+  box-shadow: 0 10px 24px rgba(9, 90, 116, 0.08);
+}
+
+.app-shell--guard .icon-button:hover {
+  border-color: rgba(20, 182, 218, 0.54);
+  background: rgba(222, 249, 255, 0.92);
+}
+
+.app-shell--guard .icon-button--primary {
+  border-color: rgba(12, 139, 177, 0.52);
+  background: linear-gradient(135deg, #1398bd, #6de2f5);
+  color: #052b38;
+  box-shadow: 0 16px 34px rgba(20, 182, 218, 0.22);
+}
+
+.app-shell--guard .icon-button--ghost {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.app-shell--guard .product-switcher {
+  border-color: rgba(11, 127, 161, 0.2);
+  background: rgba(244, 253, 255, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 10px 24px rgba(9, 90, 116, 0.08);
+}
+
+.app-shell--guard .product-switcher__item--active {
+  background: linear-gradient(135deg, rgba(20, 182, 218, 0.24), rgba(109, 226, 245, 0.38));
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px rgba(11, 127, 161, 0.14);
+}
+
+.app-shell--guard .guild-list,
+.app-shell--guard .settings-panel,
+.app-shell--guard .function-sidebar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(236, 251, 255, 0.5) 42%, transparent),
+    var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.app-shell--guard .dashboard-mode-nav {
+  border-color: rgba(11, 127, 161, 0.22);
+  background: rgba(245, 253, 255, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 10px 28px rgba(9, 90, 116, 0.1);
+}
+
+.app-shell--guard .dashboard-mode-nav__item {
+  border-color: rgba(11, 127, 161, 0.14);
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--muted);
+}
+
+.app-shell--guard .dashboard-mode-nav__item:hover,
+.app-shell--guard .dashboard-mode-nav__item--active {
+  border-color: rgba(20, 182, 218, 0.58);
+  background: linear-gradient(135deg, rgba(20, 182, 218, 0.18), rgba(109, 226, 245, 0.3));
+  color: var(--text-strong);
+}
+
+.app-shell--guard .field,
+.app-shell--guard .switch-row,
+.app-shell--guard .feature-card,
+.app-shell--guard .guard-verification-toggle,
+.app-shell--guard .guard-feature-row,
+.app-shell--guard .guard-server-row,
+.app-shell--guard .guard-event-row,
+.app-shell--guard .guard-verification-record,
+.app-shell--guard .host-fact,
+.app-shell--guard .metric-tile {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(232, 249, 254, 0.48)),
+    rgba(255, 255, 255, 0.5);
+}
+
+.app-shell--guard input,
+.app-shell--guard select,
+.app-shell--guard textarea {
+  border-color: rgba(11, 127, 161, 0.26);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text-strong);
+}
+
+.app-shell--guard input:focus,
+.app-shell--guard select:focus,
+.app-shell--guard textarea:focus {
+  border-color: rgba(20, 182, 218, 0.78);
+  box-shadow: 0 0 0 3px rgba(20, 182, 218, 0.18);
+}
+
+.app-shell--guard input[type="checkbox"] {
+  background: rgba(11, 127, 161, 0.18);
+}
+
+.app-shell--guard input[type="checkbox"]:checked {
+  background: linear-gradient(135deg, #1198bd, #65daf1);
+}
+
+.app-shell--guard .status-banner {
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.app-shell--guard .status-banner--error {
+  border-color: rgba(196, 61, 90, 0.38);
+  background: rgba(255, 241, 244, 0.92);
+  color: #9b3047;
+}
+
+.app-shell--guard .status-banner--success {
+  border-color: rgba(13, 127, 96, 0.36);
+  background: rgba(235, 255, 247, 0.92);
+  color: #0d6b52;
+}
+
+.app-shell--guard .status-banner--info {
+  border-color: rgba(20, 182, 218, 0.38);
+  background: rgba(232, 250, 255, 0.92);
+  color: #0a6f8c;
+}
+
 .dashboard-grid--guard {
   align-items: start;
+}
+
+.dashboard-grid--guard-auth {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .workspace--guard {
@@ -2528,9 +2702,8 @@ input[type="checkbox"]:checked::before {
   grid-template-columns: minmax(220px, 0.22fr) minmax(0, 1fr);
 }
 
-.dashboard-mode-nav--guard {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  width: min(100%, 900px);
+.workspace-layout--guard-auth {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .guard-status-rail {
@@ -2706,6 +2879,79 @@ input[type="checkbox"]:checked::before {
   margin: 0 0 14px;
 }
 
+.guard-feature-index {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.guard-feature-index__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.guard-feature-index__item {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 84px;
+  border: 1px solid rgba(111, 232, 255, 0.28);
+  border-radius: 8px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(111, 232, 255, 0.12), rgba(255, 119, 200, 0.06)),
+    rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.guard-feature-index__item:hover {
+  border-color: rgba(111, 232, 255, 0.58);
+  background:
+    linear-gradient(135deg, rgba(111, 232, 255, 0.18), rgba(255, 119, 200, 0.1)),
+    rgba(255, 255, 255, 0.06);
+  transform: translateY(-1px);
+}
+
+.guard-feature-index__icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid rgba(111, 232, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(111, 232, 255, 0.08);
+  color: var(--cyan);
+}
+
+.guard-feature-index__item strong,
+.guard-feature-index__item small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.guard-feature-index__item strong {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.guard-feature-index__item small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 680;
+  line-height: 1.45;
+}
+
 .guard-verification-panel {
   display: grid;
   gap: 14px;
@@ -2821,6 +3067,57 @@ input[type="checkbox"]:checked::before {
   font-weight: 700;
 }
 
+.app-shell--guard .guard-status-card {
+  border-color: rgba(20, 182, 218, 0.25);
+  background:
+    linear-gradient(135deg, rgba(101, 218, 241, 0.18), transparent 46%),
+    rgba(255, 255, 255, 0.62);
+}
+
+.app-shell--guard .guard-status-card__icon {
+  border-color: rgba(20, 182, 218, 0.36);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 0 0 4px rgba(20, 182, 218, 0.12);
+}
+
+.app-shell--guard .guard-feature-index__item {
+  border-color: rgba(20, 182, 218, 0.28);
+  background:
+    linear-gradient(135deg, rgba(101, 218, 241, 0.2), rgba(255, 255, 255, 0.5)),
+    rgba(245, 253, 255, 0.74);
+}
+
+.app-shell--guard .guard-feature-index__item:hover {
+  border-color: rgba(20, 182, 218, 0.62);
+  background:
+    linear-gradient(135deg, rgba(101, 218, 241, 0.28), rgba(255, 255, 255, 0.62)),
+    rgba(245, 253, 255, 0.86);
+}
+
+.app-shell--guard .guard-feature-index__icon,
+.app-shell--guard .guard-feature-row > .svg-icon,
+.app-shell--guard .guard-event-row__icon {
+  border-color: rgba(20, 182, 218, 0.28);
+  background: rgba(20, 182, 218, 0.1);
+  color: #0b8eb0;
+}
+
+.app-shell--guard .guard-verification-record--private {
+  border-color: rgba(11, 127, 161, 0.26);
+}
+
+.app-shell--guard .guard-verification-record--private .guard-event-row__icon {
+  border-color: rgba(11, 127, 161, 0.3);
+  background: rgba(11, 127, 161, 0.08);
+  color: #0b7f9f;
+}
+
+.app-shell--guard .guard-verification-empty,
+.app-shell--guard .empty-state {
+  border-color: rgba(11, 127, 161, 0.2);
+  background: rgba(255, 255, 255, 0.5);
+}
+
 @media (max-width: 860px) {
   .app-shell {
     width: min(100% - 22px, 1500px);
@@ -2875,6 +3172,7 @@ input[type="checkbox"]:checked::before {
   .host-metrics,
   .host-admin__grid,
   .guard-panel-grid,
+  .guard-feature-index__list,
   .user-page__grid,
   .activity-metric-grid,
   .playlist-url-form,
@@ -2896,10 +3194,6 @@ input[type="checkbox"]:checked::before {
 
   .product-switcher__item {
     flex: 1 1 0;
-  }
-
-  .dashboard-mode-nav--guard {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .guard-server-row {
