@@ -391,17 +391,53 @@ function readInitialProduct() {
 
 function configuredOneApiBase() {
   const params = new URLSearchParams(window.location.search);
+  const paramApiBase = cleanGuardApiBase(params.get("oneApiBase"));
+  if (paramApiBase) {
+    return paramApiBase;
+  }
+
   let storedApiBase = null;
   try {
     storedApiBase = localStorage.getItem(ONE_API_BASE_STORAGE_KEY);
   } catch {
     storedApiBase = null;
   }
-  return cleanGuardApiBase(params.get("oneApiBase")) ?? cleanGuardApiBase(storedApiBase) ?? (isLocalDashboardOrigin() ? LOCAL_ONE_API_BASE_URL : PUBLIC_API_BASE_URL);
+
+  const cleanStoredApiBase = cleanGuardApiBase(storedApiBase);
+  if (cleanStoredApiBase && !isWrongPublicOneApiBase(cleanStoredApiBase)) {
+    return cleanStoredApiBase;
+  }
+  if (cleanStoredApiBase) {
+    try {
+      localStorage.removeItem(ONE_API_BASE_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }
+  return defaultOneApiBase();
 }
 
 function isLocalDashboardOrigin() {
   return ["127.0.0.1", "localhost", "::1"].includes(window.location.hostname);
+}
+
+function defaultOneApiBase() {
+  return isLocalDashboardOrigin() ? LOCAL_ONE_API_BASE_URL : PUBLIC_API_BASE_URL;
+}
+
+function isWrongPublicOneApiBase(value) {
+  if (isLocalDashboardOrigin()) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    if (window.location.protocol === "https:" && url.protocol !== "https:") {
+      return true;
+    }
+    return ["127.0.0.1", "localhost", "::1", window.location.hostname].includes(url.hostname);
+  } catch {
+    return true;
+  }
 }
 
 function configuredGuardApiBase() {
