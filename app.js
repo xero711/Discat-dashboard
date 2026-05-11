@@ -262,7 +262,6 @@ const state = {
     loadedAt: null,
     source: "sample",
     status: normalizeGuardStatus(null),
-    ownerKey: "",
     verificationSettings: [],
     verificationOptions: null,
     verificationOptionsError: null,
@@ -2157,9 +2156,7 @@ async function loadGuardData(options = {}) {
         guardFetchJson(guardApiUrl("/events?limit=30")),
         guardFetchJson(guardApiUrl("/verification/settings")),
         guardFetchJson(guardApiUrl("/verification/records?limit=30")),
-        state.guard.ownerKey
-          ? guardFetchJson(guardApiUrl("/verification/options"), { headers: guardOwnerHeaders() })
-          : Promise.resolve(null),
+        guardFetchJson(guardApiUrl("/verification/options")),
       ]);
       if (healthResult.status !== "fulfilled") {
         throw healthResult.reason;
@@ -2243,10 +2240,6 @@ async function guardFetchJson(url, options = {}) {
     throw new Error(detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`);
   }
   return response.json();
-}
-
-function guardOwnerHeaders() {
-  return state.guard.ownerKey ? { "X-Guard-Owner-Key": state.guard.ownerKey } : {};
 }
 
 function guardConnectionErrorMessage(rawUrl) {
@@ -2661,15 +2654,11 @@ function renderGuardVerification() {
         <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "API接続済み" : "API未接続"}</span>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>公開ログと通常ダッシュボードには生IPを表示しません。生IPはオーナーキーで取得した専用一覧だけに表示します。</span>
+        ${icon("shield")}<span>サーバーごとに認証ボタン、ログチャンネル、付与ロール、同一端末検知時の処置を設定します。</span>
       </div>
       ${state.guard.verificationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.verificationError)}</span></p>` : ""}
       ${state.guard.verificationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.verificationMessage)}</span></p>` : ""}
       <form class="settings-grid guard-verification-form" data-guard-verification-form>
-        <label class="field">
-          <span>Owner Key</span>
-          <input type="password" autocomplete="off" data-guard-verification-field="owner_key" value="${escapeAttribute(state.guard.ownerKey)}" placeholder="config.py の VERIFICATION_OWNER_KEY" />
-        </label>
         <label class="field">
           <span>API Base URL</span>
           <input id="guardApiBaseInput" type="url" value="${escapeAttribute(state.guard.apiBase || "")}" placeholder="${escapeAttribute(defaultGuardApiBase())}" />
@@ -2696,12 +2685,12 @@ function renderGuardVerification() {
           <button class="icon-button icon-button--ghost" type="button" data-action="guard-save-api">
             ${icon("link")}<span>接続</span>
           </button>
-          <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-verification-options" ${!state.guard.ownerKey || !state.guard.apiBase ? "disabled" : ""}>
+          <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-verification-options" ${!state.guard.apiBase ? "disabled" : ""}>
             ${icon("refresh")}<span>候補を取得</span>
           </button>
         </div>
       </form>
-      ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネルとロール候補の取得にはOwner Keyが必要です: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
+      ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネルとロール候補を取得できませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
       ${renderGuardVerificationServerSettings(guilds)}
     </section>
     <section class="guard-panel-grid">
@@ -2716,13 +2705,13 @@ function renderGuardVerification() {
       </div>
       <div class="settings-panel">
         <div class="settings-panel__header">
-          <div class="panel-heading">${icon("shield")}<h2>Owner専用IP確認</h2></div>
-          <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-private-records" ${!state.guard.ownerKey || state.guard.privateRecordsLoading || !state.guard.apiBase ? "disabled" : ""}>
+          <div class="panel-heading">${icon("shield")}<h2>IP確認</h2></div>
+          <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-private-records" ${state.guard.privateRecordsLoading || !state.guard.apiBase ? "disabled" : ""}>
             ${icon("lock")}<span>${state.guard.privateRecordsLoading ? "取得中" : "IPを表示"}</span>
           </button>
         </div>
         <div class="guard-verification-records guard-verification-records--private">
-          ${privateRecords.length ? privateRecords.map(renderGuardVerificationPrivateRecord).join("") : renderGuardVerificationEmpty("Owner Keyで取得するまで生IPは表示されません。")}
+          ${privateRecords.length ? privateRecords.map(renderGuardVerificationPrivateRecord).join("") : renderGuardVerificationEmpty("IP一覧はボタンを押すまで表示されません。")}
         </div>
       </div>
     </section>
@@ -2817,7 +2806,7 @@ function renderGuardVerificationServerSettings(guilds) {
   });
   return `
     <div class="guard-server-list guard-verification-server-list">
-      ${rows.length ? rows.join("") : renderGuardVerificationEmpty("Owner Keyを入力して候補を取得すると、サーバーごとに認証設定を編集できます。")}
+      ${rows.length ? rows.join("") : renderGuardVerificationEmpty("候補を取得すると、サーバーごとに認証設定を編集できます。")}
     </div>
   `;
 }
@@ -3015,16 +3004,6 @@ function updateGuardVerificationField(target, options = { renderAfter: true }) {
   if (!field) {
     return;
   }
-  if (field === "owner_key") {
-    state.guard.ownerKey = target.value;
-    state.guard.verificationOptionsError = null;
-    if (!state.guard.ownerKey) {
-      state.guard.privateRecords = [];
-    }
-    refreshGuardVerificationOwnerControls();
-    return;
-  }
-
   if (field === "guild_id") {
     const guildId = target.value;
     if (options.renderAfter) {
@@ -3049,7 +3028,7 @@ function updateGuardVerificationField(target, options = { renderAfter: true }) {
 }
 
 function refreshGuardVerificationOwnerControls() {
-  const disabled = !state.guard.ownerKey || !state.guard.apiBase;
+  const disabled = !state.guard.apiBase;
   root.querySelectorAll('[data-action="guard-load-verification-options"], [data-action="guard-load-private-records"]').forEach((button) => {
     if (button instanceof HTMLButtonElement) {
       button.disabled = disabled || (button.dataset.action === "guard-load-private-records" && state.guard.privateRecordsLoading);
@@ -3060,11 +3039,6 @@ function refreshGuardVerificationOwnerControls() {
 async function saveGuardVerificationSettings() {
   if (!state.guard.apiBase) {
     state.guard.verificationError = "Guard API Base URLを設定してください。";
-    render();
-    return;
-  }
-  if (!state.guard.ownerKey) {
-    state.guard.verificationError = "保存にはOwner Keyが必要です。";
     render();
     return;
   }
@@ -3083,7 +3057,6 @@ async function saveGuardVerificationSettings() {
   try {
     const payload = await guardFetchJson(guardApiUrl("/verification/settings"), {
       method: "POST",
-      headers: guardOwnerHeaders(),
       body: JSON.stringify({ settings: form }),
     });
     const nextSettings = normalizeGuardVerificationSettings([payload?.settings]);
@@ -3114,15 +3087,10 @@ async function loadGuardVerificationOptions() {
     render();
     return;
   }
-  if (!state.guard.ownerKey) {
-    state.guard.verificationError = "候補取得にはOwner Keyが必要です。";
-    render();
-    return;
-  }
   state.guard.verificationError = null;
   state.guard.verificationOptionsError = null;
   try {
-    const payload = await guardFetchJson(guardApiUrl("/verification/options"), { headers: guardOwnerHeaders() });
+    const payload = await guardFetchJson(guardApiUrl("/verification/options"));
     state.guard.verificationOptions = normalizeGuardVerificationOptions(payload);
     hydrateGuardVerificationForm();
     state.guard.verificationMessage = "チャンネルとロール候補を取得しました。";
@@ -3138,22 +3106,15 @@ async function loadGuardVerificationPrivateRecords() {
     render();
     return;
   }
-  if (!state.guard.ownerKey) {
-    state.guard.verificationError = "IP確認にはOwner Keyが必要です。";
-    render();
-    return;
-  }
   state.guard.privateRecordsLoading = true;
   state.guard.verificationError = null;
   render();
   try {
     const guildId = state.guard.verificationForm.guild_id;
     const query = guildId ? `?guild_id=${encodeURIComponent(guildId)}&limit=30` : "?limit=30";
-    const payload = await guardFetchJson(guardApiUrl(`/verification/private-records${query}`), {
-      headers: guardOwnerHeaders(),
-    });
+    const payload = await guardFetchJson(guardApiUrl(`/verification/private-records${query}`));
     state.guard.privateRecords = normalizeGuardVerificationRecords(payload?.records);
-    state.guard.verificationMessage = "Owner専用IP一覧を取得しました。";
+    state.guard.verificationMessage = "IP一覧を取得しました。";
   } catch (error) {
     state.guard.verificationError = error instanceof Error ? error.message : String(error);
   } finally {
