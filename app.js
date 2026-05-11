@@ -8,6 +8,7 @@ const PRODUCT_STORAGE_KEY = "discat_dashboard_product";
 const ONE_API_BASE_STORAGE_KEY = "discat_one_api_base";
 const GUARD_API_BASE_STORAGE_KEY = "discat_guard_api_base";
 const GUARD_DEFAULT_API_BASE_URL = "http://127.0.0.1:8788";
+const GUARD_PUBLIC_API_BASE_URL = "https://guard-api.xero-x.me";
 const GUARD_STATUS_SAMPLE_ENDPOINT = "./guard-status.sample.json";
 const AUTH_TOKEN_STORAGE_KEY = "discat_one_session_token";
 const AUTH_TOKEN_COOKIE_NAME = "discat_one_session_token";
@@ -422,7 +423,7 @@ function configuredGuardApiBase() {
 }
 
 function defaultGuardApiBase() {
-  return isLocalDashboardOrigin() ? GUARD_DEFAULT_API_BASE_URL : "";
+  return isLocalDashboardOrigin() ? GUARD_DEFAULT_API_BASE_URL : GUARD_PUBLIC_API_BASE_URL;
 }
 
 function cleanGuardApiBase(value) {
@@ -2620,7 +2621,7 @@ function renderGuardVerification() {
         </label>
         <label class="field">
           <span>API Base URL</span>
-          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(state.guard.apiBase || "")}" placeholder="http://127.0.0.1:8788" />
+          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(state.guard.apiBase || "")}" placeholder="${escapeAttribute(defaultGuardApiBase())}" />
         </label>
         ${renderGuardApiHint()}
         ${renderGuardVerificationGuildField(guilds, form.guild_id)}
@@ -2831,7 +2832,7 @@ function renderGuardSettings() {
       <form class="settings-grid guard-api-form" data-guard-api-form>
         <label class="field">
           <span>API Base URL</span>
-          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(source)}" placeholder="http://127.0.0.1:8788" />
+          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(source)}" placeholder="${escapeAttribute(defaultGuardApiBase())}" />
         </label>
         <div class="feature-card__actions">
           <button class="icon-button icon-button--primary" type="submit">${icon("save")}<span>保存して接続</span></button>
