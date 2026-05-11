@@ -522,12 +522,12 @@ function updateDocumentForProduct() {
   const product = PRODUCT_META[state.activeProduct] ?? PRODUCT_META.one;
   document.title = `${product.label} Dashboard`;
   setMetaContent("description", product.id === "guard" ? "Discat Guard のセキュリティダッシュボード" : "Discat Botの導入、設定はこちら");
-  setMetaContent("theme-color", product.id === "guard" ? "#d8f9ff" : "#21183f");
+  setMetaContent("theme-color", "#21183f");
   setMetaContent("og:site_name", product.label, "property");
   setMetaContent("og:title", `${product.label} Dashboard`, "property");
   setMetaContent("twitter:title", `${product.label} Dashboard`);
   setSiteIcon(product.id === "guard" ? GUARD_ICON_URL : "./assets/favicon.ico?v=20260510-site-icon-1");
-  document.body.classList.toggle("body--guard", product.id === "guard");
+  document.body.classList.remove("body--guard");
 }
 
 function setMetaContent(name, content, attr = "name") {
@@ -1816,7 +1816,7 @@ function defaultServerPageId() {
 function render() {
   stopPlaylistProgressLoop();
   const serviceOnly = state.activeProduct === "one" && serviceStatusOnlyActive();
-  const shellClasses = ["app-shell", `app-shell--${state.activeProduct}`];
+  const shellClasses = ["app-shell"];
   if (state.pendingPageId && hasUnsavedChanges()) {
     shellClasses.push("app-shell--with-unsaved-bar");
   }
@@ -1878,9 +1878,6 @@ function renderTopbar() {
               <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
                 ${icon("external")}<span>サポートサーバー</span>
               </a>
-              <button class="icon-button" type="button" data-action="refresh-account" ${state.loading ? "disabled" : ""}>
-                ${icon("refresh")}<span>再読込</span>
-              </button>
               <div class="user-chip">
                 ${
                   state.user.avatar_url
@@ -1924,7 +1921,7 @@ function loginButtonState() {
     return { icon: "radio", label: "メンテナンス中" };
   }
   if (state.serviceStatus.loading) {
-    return { icon: "refresh", label: "確認中" };
+    return { icon: "radio", label: "接続中" };
   }
   if (loginBlocked()) {
     return { icon: "shield", label: "検証待ち" };
@@ -1965,7 +1962,7 @@ function renderServiceStatusPanel(mode) {
   const checking = mode === "checking" || state.serviceStatus.loading;
   return `
     <section class="service-status-panel service-status-panel--${checking ? "checking" : "maintenance"}" data-service-status>
-      <h2>${checking ? "確認中" : "メンテナンス中"}</h2>
+      <h2>${checking ? "接続中" : "メンテナンス中"}</h2>
     </section>
   `;
 }
@@ -2435,9 +2432,6 @@ function renderGuardStatusRail() {
         ${renderHostFact("Ping", status.latency_ms == null ? "未取得" : `${status.latency_ms}ms`)}
         ${renderHostFact("更新", formatTimeOnly(state.guard.loadedAt))}
       </div>
-      <button class="icon-button icon-button--primary guard-rail-refresh" type="button" data-action="guard-refresh" ${state.guard.loading ? "disabled" : ""}>
-        ${icon("refresh")}<span>${state.guard.loading ? "更新中" : "状態更新"}</span>
-      </button>
     </aside>
   `;
 }
@@ -2581,9 +2575,6 @@ function renderGuardEvents() {
     <section class="settings-panel">
       <div class="settings-panel__header">
         <div class="panel-heading">${icon("activity")}<h2>監査ログ</h2></div>
-        <button class="icon-button icon-button--ghost" type="button" data-action="guard-refresh" ${state.guard.loading ? "disabled" : ""}>
-          ${icon("refresh")}<span>${state.guard.loading ? "更新中" : "更新"}</span>
-        </button>
       </div>
       <div class="guard-event-list">
         ${events.map(renderGuardEventRow).join("")}
@@ -4573,8 +4564,6 @@ function handleClick(event) {
     const action = actionEl.dataset.action;
     if (action === "switch-product") {
       void activateProduct(actionEl.dataset.product);
-    } else if (action === "guard-refresh") {
-      void loadGuardData();
     } else if (action === "guard-save-api") {
       saveGuardApiBase();
     } else if (action === "guard-clear-api") {
@@ -4595,8 +4584,6 @@ function handleClick(event) {
       window.location.href = api.loginUrl(turnstileToken);
     } else if (action === "logout") {
       void logout();
-    } else if (action === "refresh-account") {
-      void loadAccount();
     } else if (action === "refresh-service-status") {
       void refreshServiceStatus();
     } else if (action === "refresh-host") {
