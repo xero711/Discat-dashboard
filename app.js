@@ -2,7 +2,7 @@
 
 const PUBLIC_API_BASE_URL = "https://api.xero-x.me";
 const LOCAL_ONE_API_BASE_URL = "http://127.0.0.1:8000";
-const PUBLIC_DASHBOARD_URL = "https://xero-x.me/dashboard/";
+const PUBLIC_DASHBOARD_URL = "https://xero-x.me/Discat-dashboard/";
 const API_BASE_URL = configuredOneApiBase();
 const PRODUCT_STORAGE_KEY = "discat_dashboard_product";
 const ONE_API_BASE_STORAGE_KEY = "discat_one_api_base";
@@ -411,7 +411,18 @@ function configuredGuardApiBase() {
   } catch {
     storedApiBase = null;
   }
-  return cleanGuardApiBase(params.get("guardApiBase")) ?? cleanGuardApiBase(params.get("apiBase")) ?? cleanGuardApiBase(storedApiBase) ?? GUARD_DEFAULT_API_BASE_URL;
+  const configuredApiBase =
+    cleanGuardApiBase(params.get("guardApiBase")) ??
+    cleanGuardApiBase(params.get("apiBase")) ??
+    cleanGuardApiBase(storedApiBase);
+  if (configuredApiBase && validateGuardApiBase(configuredApiBase)) {
+    return defaultGuardApiBase();
+  }
+  return configuredApiBase ?? defaultGuardApiBase();
+}
+
+function defaultGuardApiBase() {
+  return isLocalDashboardOrigin() ? GUARD_DEFAULT_API_BASE_URL : "";
 }
 
 function cleanGuardApiBase(value) {
@@ -431,6 +442,26 @@ function cleanGuardApiBase(value) {
   } catch {
     return null;
   }
+}
+
+function validateGuardApiBase(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return "API Base URLは http:// または https:// から始まるURLを入力してください。";
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    return "API Base URLは http:// または https:// から始まるURLを入力してください。";
+  }
+  if (window.location.protocol === "https:" && url.protocol !== "https:" && !isLocalDashboardOrigin()) {
+    return "GitHub PagesなどHTTPSのダッシュボードでは、https:// から始まるGuard API URLを指定してください。";
+  }
+  return "";
 }
 
 function writeProductPreference(productId) {
@@ -2152,15 +2183,34 @@ async function guardFetchJson(url, options = {}) {
   if (hasBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(url, { ...options, headers, cache: "no-store" });
+  let response;
+  try {
+    response = await fetch(url, { ...options, headers, cache: "no-store" });
+  } catch {
+    throw new Error(guardConnectionErrorMessage(url));
+  }
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    const payload = await response.json().catch(() => null);
+    const detail = isObject(payload) ? (payload.message ?? payload.error) : "";
+    throw new Error(detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`);
   }
   return response.json();
 }
 
 function guardOwnerHeaders() {
   return state.guard.ownerKey ? { "X-Guard-Owner-Key": state.guard.ownerKey } : {};
+}
+
+function guardConnectionErrorMessage(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (window.location.protocol === "https:" && url.protocol === "http:" && !isLocalDashboardOrigin()) {
+      return "HTTPSのダッシュボードからHTTPのGuard APIには接続できません。HTTPSで公開したGuard API URLを指定してください。";
+    }
+  } catch {
+    // Fall through to the generic connection message.
+  }
+  return "Guard APIに接続できませんでした。API URL、Guard APIの起動状態、CORS許可Originを確認してください。";
 }
 
 function normalizeGuardStatus(status) {
@@ -2460,6 +2510,21 @@ function renderGuardApiNotice() {
   `;
 }
 
+function renderGuardApiHint() {
+  if (state.guard.source === "api") {
+    return "";
+  }
+  const message =
+    window.location.protocol === "https:" && !isLocalDashboardOrigin()
+      ? "GitHub Pagesから認証設定を保存するには、HTTPSで公開されたGuard API URLを指定してください。"
+      : "Guard API URLを接続すると認証設定を保存できます。";
+  return `
+    <div class="status-banner status-banner--info guard-api-hint">
+      ${icon("info")}<span>${escapeHtml(message)}</span>
+    </div>
+  `;
+}
+
 function renderGuardServers() {
   const guilds = state.guard.status.guilds ?? [];
   if (!guilds.length) {
@@ -2566,6 +2631,7 @@ function renderGuardVerification() {
           <span>API Base URL</span>
           <input id="guardApiBaseInput" type="url" value="${escapeAttribute(state.guard.apiBase || "")}" placeholder="http://127.0.0.1:8788" />
         </label>
+        ${renderGuardApiHint()}
         ${renderGuardVerificationGuildField(guilds, form.guild_id)}
         ${renderGuardVerificationChannelField("button_channel_id", "認証ボタン配置チャンネル", form.button_channel_id, selectedGuild)}
         ${renderGuardVerificationChannelField("log_channel_id", "認証ログチャンネル", form.log_channel_id, selectedGuild)}
@@ -2812,8 +2878,21 @@ function renderGuardSettings() {
 
 function saveGuardApiBase() {
   const input = root.querySelector("#guardApiBaseInput");
-  const value = cleanGuardApiBase(input instanceof HTMLInputElement ? input.value : "");
+  const rawValue = input instanceof HTMLInputElement ? input.value : "";
+  const validationMessage = validateGuardApiBase(rawValue);
+  if (validationMessage) {
+    state.guard.verificationError = validationMessage;
+    state.guard.verificationMessage = null;
+    render();
+    return;
+  }
+  const value = cleanGuardApiBase(rawValue);
   state.guard.apiBase = value ?? "";
+  state.guard.apiError = null;
+  state.guard.verificationError = null;
+  state.guard.verificationMessage = value
+    ? "Guard API Base URLを保存しました。"
+    : "Guard API Base URLをクリアしました。";
   try {
     if (value) {
       localStorage.setItem(GUARD_API_BASE_STORAGE_KEY, value);
@@ -2828,6 +2907,9 @@ function saveGuardApiBase() {
 
 function clearGuardApiBase() {
   state.guard.apiBase = "";
+  state.guard.apiError = null;
+  state.guard.verificationError = null;
+  state.guard.verificationMessage = "Guard API Base URLをクリアしました。";
   try {
     localStorage.removeItem(GUARD_API_BASE_STORAGE_KEY);
   } catch {

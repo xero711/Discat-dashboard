@@ -2879,6 +2879,11 @@ input[type="checkbox"]:checked::before {
   margin: 0 0 14px;
 }
 
+.guard-api-hint {
+  grid-column: 1 / -1;
+  box-shadow: none;
+}
+
 .guard-feature-index {
   display: grid;
   gap: 14px;
