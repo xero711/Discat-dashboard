@@ -2151,6 +2151,27 @@ input[type="checkbox"]:checked::before {
   line-height: 1.55;
 }
 
+.guild-data-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.guild-data-state > .svg-icon {
+  flex: 0 0 auto;
+  color: var(--muted-2);
+}
+
+.guild-data-state > span {
+  flex: 1 1 220px;
+}
+
+.guild-data-state--loading > .svg-icon {
+  color: var(--cyan);
+  animation: spin 0.9s linear infinite;
+}
+
 .login-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 330px);
@@ -3014,10 +3035,21 @@ input[type="checkbox"]:checked::before {
   font-weight: 750;
 }
 
-.guard-verification-toggle input {
+.guard-verification-toggle input[type="checkbox"] {
+  flex: 0 0 46px;
+  width: 46px;
+  height: 26px;
+  min-height: 26px;
+}
+
+.guard-verification-toggle input[type="checkbox"]::before {
   width: 18px;
-  min-height: 18px;
-  accent-color: var(--pink);
+  height: 18px;
+  margin: 3px;
+}
+
+.guard-verification-toggle input[type="checkbox"]:checked::before {
+  transform: translateX(20px);
 }
 
 .guard-verification-actions {

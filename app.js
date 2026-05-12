@@ -249,6 +249,7 @@ const state = {
   loading: false,
   saving: false,
   message: null,
+  guildDataError: null,
   dirtyViews: {
     tts: false,
     features: false,
@@ -359,7 +360,10 @@ async function boot() {
   render();
   updateDocumentForProduct();
   if (state.activeProduct === "guard") {
-    await loadGuardData({ hydrate: false });
+    await Promise.all([
+      loadGuardAccountContext({ silent: true, renderAfter: false }),
+      loadGuardData({ silent: true, renderAfter: false }),
+    ]);
     hydrateGuardVerificationForm();
     render();
     return;
@@ -539,7 +543,10 @@ async function activateProduct(productId) {
   render();
 
   if (nextProduct === "guard") {
-    await loadGuardData({ silent: true });
+    await Promise.all([
+      loadGuardAccountContext({ silent: true, renderAfter: false }),
+      loadGuardData({ silent: true, renderAfter: false }),
+    ]);
     hydrateGuardVerificationForm();
     render();
     return;
@@ -865,6 +872,7 @@ async function loadAccount() {
   state.requestIds.account = requestId;
   state.loading = true;
   state.message = null;
+  state.guildDataError = null;
   render();
 
   try {
@@ -908,11 +916,58 @@ async function loadAccount() {
   }
 }
 
+async function loadGuardAccountContext(options = {}) {
+  if (!getAuthToken()) {
+    return;
+  }
+
+  const requestId = state.requestIds.account + 1;
+  state.requestIds.account = requestId;
+  if (!options.silent) {
+    state.loading = true;
+    render();
+  }
+
+  try {
+    const [me, guilds] = await Promise.all([api.me(), api.guilds()]);
+    if (requestId !== state.requestIds.account) {
+      return;
+    }
+    state.user = me;
+    state.guilds = Array.isArray(guilds) ? guilds : [];
+    const currentGuild = state.guilds.find((guild) => guild.id === state.selectedGuildId);
+    state.selectedGuildId =
+      currentGuild?.bot_present && currentGuild.can_manage
+        ? state.selectedGuildId
+        : (state.guilds.find((guild) => guild.bot_present && guild.can_manage)?.id ?? null);
+    hydrateGuardVerificationForm();
+  } catch (error) {
+    if (requestId !== state.requestIds.account) {
+      return;
+    }
+    if (error instanceof ApiError && error.status === 401) {
+      resetSessionState();
+      return;
+    }
+    state.message = error instanceof Error ? error.message : "サーバー一覧を取得できませんでした。";
+  } finally {
+    if (requestId === state.requestIds.account) {
+      if (!options.silent) {
+        state.loading = false;
+      }
+      if (options.renderAfter !== false) {
+        render();
+      }
+    }
+  }
+}
+
 async function loadGuildData(guildId) {
   const requestId = state.requestIds.guildData + 1;
   state.requestIds.guildData = requestId;
   state.loading = true;
   state.message = null;
+  state.guildDataError = null;
   state.ttsOptions = null;
   state.featureSettings = null;
   state.savedSettings = null;
@@ -937,7 +992,8 @@ async function loadGuildData(guildId) {
     if (requestId !== state.requestIds.guildData) {
       return;
     }
-    state.message = error instanceof Error ? error.message : "サーバー設定を取得できませんでした。";
+    state.guildDataError = error instanceof Error ? error.message : "サーバー設定を取得できませんでした。";
+    state.message = state.guildDataError;
   } finally {
     if (requestId === state.requestIds.guildData) {
       state.loading = false;
@@ -1824,6 +1880,7 @@ function resetSessionState() {
   state.featureSettings = null;
   state.savedFeatureSettings = null;
   state.ttsOptions = null;
+  state.guildDataError = null;
   state.hostStatus = null;
   state.hostLogs = [];
   state.hostError = null;
@@ -2193,7 +2250,9 @@ async function loadGuardData(options = {}) {
       state.guard.source = "api";
       state.guard.loadedAt = new Date().toISOString();
       state.guard.loading = false;
-      render();
+      if (options.renderAfter !== false) {
+        render();
+      }
       return;
     } catch (error) {
       if (requestId !== state.requestIds.guard) {
@@ -2221,7 +2280,9 @@ async function loadGuardData(options = {}) {
   state.guard.verificationOptions = null;
   state.guard.verificationRecords = [];
   state.guard.loading = false;
-  render();
+  if (options.renderAfter !== false) {
+    render();
+  }
 }
 
 function guardApiUrl(path) {
@@ -2492,6 +2553,7 @@ function renderGuardFunctionNavItem(feature) {
 
 function renderGuardGuildList() {
   const guilds = guardConfigurableGuilds();
+  const installableGuilds = guardInstallableGuilds();
   const selectedGuild = guardVerificationSelectedGuild();
   const guildListExpanded = !state.guildListCollapsed;
   return `
@@ -2507,7 +2569,7 @@ function renderGuardGuildList() {
       <div class="guild-list__mobile-summary">
         <span>選択中</span>
         <strong>${escapeHtml(selectedGuild?.name ?? "サーバー未選択")}</strong>
-        <small>設定可能 ${guilds.length}</small>
+        <small>設定可能 ${guilds.length} / BOT未導入 ${installableGuilds.length}</small>
       </div>
       <div class="guild-list__body" id="guard-guild-list-body">
         ${renderGuildSection(
@@ -2516,6 +2578,13 @@ function renderGuardGuildList() {
           guilds.length > 0
             ? guilds.map(renderGuardSelectableGuild).join("")
             : `<div class="empty-state">Guard BOT導入済みで管理権限があるサーバーがありません。</div>`,
+        )}
+        ${renderGuildSection(
+          "BOT未導入",
+          installableGuilds.length,
+          installableGuilds.length > 0
+            ? installableGuilds.map(renderInstallableGuild).join("")
+            : `<div class="empty-state">導入待ちのサーバーはありません。</div>`,
         )}
       </div>
     </aside>
@@ -2964,19 +3033,33 @@ function guardVerificationSelectedGuild() {
 
 function guardConfigurableGuilds() {
   const guardGuildsById = new Map(guardVerificationGuilds().map((guild) => [guild.id, guild]));
-  if (!state.user || state.guilds.length === 0) {
+  if (state.guilds.length === 0) {
     return [...guardGuildsById.values()];
   }
-  const filteredGuilds = state.guilds
-    .filter((guild) => guild.can_manage && guardGuildsById.has(guild.id))
-    .map((guild) => ({
-      ...guardGuildsById.get(guild.id),
-      ...guild,
-      bot_present: true,
-      can_manage: true,
-      icon_url: guild.icon_url || guardGuildsById.get(guild.id)?.icon_url || null,
-    }));
-  return filteredGuilds;
+  return state.guilds
+    .filter((guild) => guild.bot_present && guild.can_manage)
+    .map((guild) => mergeGuardGuild(guild, guardGuildsById.get(guild.id)));
+}
+
+function guardInstallableGuilds() {
+  if (state.guilds.length === 0) {
+    return [];
+  }
+  return state.guilds.filter((guild) => !guild.bot_present && guild.can_manage);
+}
+
+function mergeGuardGuild(guild, guardGuild) {
+  return {
+    id: String(guild?.id ?? guardGuild?.id ?? ""),
+    name: String(guild?.name ?? guardGuild?.name ?? guild?.id ?? "Unknown Guild"),
+    icon_url: normalizeNullableString(guild?.icon_url) || normalizeNullableString(guardGuild?.icon_url),
+    member_count: Number(guardGuild?.member_count ?? guild?.member_count ?? 0),
+    text_channels: Array.isArray(guardGuild?.text_channels) ? guardGuild.text_channels : [],
+    roles: Array.isArray(guardGuild?.roles) ? guardGuild.roles : [],
+    bot_present: Boolean(guild?.bot_present),
+    can_manage: Boolean(guild?.can_manage),
+    bot_invite_url: guild?.bot_invite_url ?? null,
+  };
 }
 
 function renderGuardSettings() {
@@ -3704,9 +3787,36 @@ function stopPlaylistProgressLoop() {
 
 function renderSettingsForm() {
   if (!state.settings) {
-    return `<section class="settings-panel empty-state">サーバーを選択してください。</section>`;
+    return renderGuildDataState();
   }
   return renderTtsSettingsForm();
+}
+
+function renderGuildDataState() {
+  if (!state.selectedGuildId) {
+    return `<section class="settings-panel empty-state">サーバーを選択してください。</section>`;
+  }
+
+  const guild = selectedGuild();
+  const guildLabel = guild?.name ? `${guild.name} の設定` : "サーバー設定";
+  if (state.loading || !state.guildDataError) {
+    return `
+      <section class="settings-panel empty-state guild-data-state guild-data-state--loading" aria-live="polite">
+        ${icon("refresh")}
+        <span>${escapeHtml(guildLabel)}を読み込み中です。</span>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="settings-panel empty-state guild-data-state" role="alert">
+      ${icon("error")}
+      <span>${escapeHtml(state.guildDataError)}</span>
+      <button class="icon-button icon-button--ghost" type="button" data-action="reload-guild-data">
+        ${icon("refresh")}<span>再読み込み</span>
+      </button>
+    </section>
+  `;
 }
 
 function renderTtsSettingsForm() {
@@ -3905,7 +4015,7 @@ function renderDictionaryEntry(entry, index) {
 
 function renderFeatureSettingsForm() {
   if (!state.featureSettings) {
-    return `<section class="settings-panel empty-state">サーバーを選択してください。</section>`;
+    return renderGuildDataState();
   }
   const textChannels = state.ttsOptions?.text_channels ?? [];
   const roles = state.ttsOptions?.roles ?? [];
@@ -4661,6 +4771,10 @@ function handleClick(event) {
       void refreshServiceStatus();
     } else if (action === "refresh-host") {
       void loadHostData();
+    } else if (action === "reload-guild-data") {
+      if (state.selectedGuildId) {
+        void loadGuildData(state.selectedGuildId);
+      }
     } else if (action === "playlist-refresh") {
       void loadPlaylist();
     } else if (action === "user-activity-refresh") {
