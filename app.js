@@ -360,6 +360,8 @@ async function boot() {
   updateDocumentForProduct();
   if (state.activeProduct === "guard") {
     await loadGuardData({ hydrate: false });
+    hydrateGuardVerificationForm();
+    render();
     return;
   }
   await loadServiceStatus({ silent: true, hydrate: false });
@@ -538,6 +540,8 @@ async function activateProduct(productId) {
 
   if (nextProduct === "guard") {
     await loadGuardData({ silent: true });
+    hydrateGuardVerificationForm();
+    render();
     return;
   }
 
@@ -572,12 +576,12 @@ function updateDocumentForProduct() {
   const product = PRODUCT_META[state.activeProduct] ?? PRODUCT_META.one;
   document.title = `${product.label} Dashboard`;
   setMetaContent("description", product.id === "guard" ? "Discat Guard のセキュリティダッシュボード" : "Discat Botの導入、設定はこちら");
-  setMetaContent("theme-color", "#21183f");
+  setMetaContent("theme-color", product.id === "guard" ? "#ddf8ff" : "#21183f");
   setMetaContent("og:site_name", product.label, "property");
   setMetaContent("og:title", `${product.label} Dashboard`, "property");
   setMetaContent("twitter:title", `${product.label} Dashboard`);
   setSiteIcon(product.id === "guard" ? GUARD_ICON_URL : "./assets/favicon.ico?v=20260510-site-icon-1");
-  document.body.classList.remove("body--guard");
+  document.body.classList.toggle("body--guard", product.id === "guard");
 }
 
 function setMetaContent(name, content, attr = "name") {
@@ -1867,6 +1871,9 @@ function render() {
   stopPlaylistProgressLoop();
   const serviceOnly = state.activeProduct === "one" && serviceStatusOnlyActive();
   const shellClasses = ["app-shell"];
+  if (state.activeProduct === "guard") {
+    shellClasses.push("app-shell--guard");
+  }
   if (state.pendingPageId && hasUnsavedChanges()) {
     shellClasses.push("app-shell--with-unsaved-bar");
   }
@@ -1909,6 +1916,7 @@ function serviceStatusOnlyActive() {
 function renderTopbar() {
   const loginState = loginButtonState();
   const product = PRODUCT_META[state.activeProduct] ?? PRODUCT_META.one;
+  const guardProduct = state.activeProduct === "guard";
   return `
     <header class="topbar">
       <div class="brand">
@@ -1921,9 +1929,7 @@ function renderTopbar() {
       <nav class="topbar__actions" aria-label="Dashboard actions">
         ${renderProductSwitcher()}
         ${
-          state.activeProduct === "guard"
-            ? ""
-            : state.user
+          state.user
             ? `
               <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
                 ${icon("external")}<span>サポートサーバー</span>
@@ -1939,6 +1945,12 @@ function renderTopbar() {
               <button class="icon-button icon-button--ghost" type="button" data-action="logout">
                 ${icon("logout")}<span>ログアウト</span>
               </button>
+            `
+            : guardProduct
+            ? `
+              <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
+                ${icon("external")}<span>サポートサーバー</span>
+              </a>
             `
             : `
               <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
@@ -2357,12 +2369,15 @@ function normalizeGuardDuplicateAction(value) {
 
 function hydrateGuardVerificationForm() {
   const form = state.guard.verificationForm;
-  const guildId =
-    form.guild_id ||
-    state.guard.verificationSettings[0]?.guild_id ||
-    state.guard.verificationOptions?.guilds?.[0]?.id ||
-    state.guard.status.guilds?.[0]?.id ||
-    "";
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  const fallbackGuildId = guilds[0]?.id ?? "";
+  const guildId = [
+    form.guild_id,
+    state.guard.verificationSettings[0]?.guild_id,
+    state.guard.verificationOptions?.guilds?.[0]?.id,
+    state.guard.status.guilds?.[0]?.id,
+  ].find((id) => id && guildIds.has(id)) ?? fallbackGuildId;
   const settings = state.guard.verificationSettings.find((item) => item.guild_id === guildId);
   state.guard.verificationForm = {
     ...form,
@@ -2390,10 +2405,10 @@ function applyGuardVerificationSettingsForGuild(guildId) {
 
 function guardSourceText() {
   if (state.guard.source === "api") {
-    return "Guard API接続済み";
+    return "接続済み";
   }
   if (state.guard.source === "api-error") {
-    return "Guard API接続失敗";
+    return "接続失敗";
   }
   return "サンプル表示";
 }
@@ -2411,7 +2426,7 @@ function guardStatusClass() {
 function renderGuardDashboard() {
   const feature = activeGuardFeature();
   const selectedGuild = guardVerificationSelectedGuild();
-  const pageTitle = selectedGuild?.name ?? (guardVerificationGuilds().length ? "サーバーを選択" : "サーバー未取得");
+  const pageTitle = selectedGuild?.name ?? (guardConfigurableGuilds().length ? "サーバーを選択" : "設定可能なサーバーなし");
   return `
     <div class="dashboard-grid dashboard-grid--guard">
       ${renderGuardGuildList()}
@@ -2476,7 +2491,7 @@ function renderGuardFunctionNavItem(feature) {
 }
 
 function renderGuardGuildList() {
-  const guilds = guardVerificationGuilds();
+  const guilds = guardConfigurableGuilds();
   const selectedGuild = guardVerificationSelectedGuild();
   const guildListExpanded = !state.guildListCollapsed;
   return `
@@ -2500,7 +2515,7 @@ function renderGuardGuildList() {
           guilds.length,
           guilds.length > 0
             ? guilds.map(renderGuardSelectableGuild).join("")
-            : `<div class="empty-state">Guard APIからサーバーを取得できませんでした。</div>`,
+            : `<div class="empty-state">Guard BOT導入済みで管理権限があるサーバーがありません。</div>`,
         )}
       </div>
     </aside>
@@ -2529,11 +2544,7 @@ function renderGuardGuildIcon(guild) {
 }
 
 function guardGuildMeta(guild) {
-  const settings = state.guard.verificationSettings.find((item) => item.guild_id === guild.id);
-  const configured = Boolean(settings?.button_channel_id && settings?.log_channel_id && settings?.role_id);
-  const statusText = configured ? (settings.enabled ? "認証 有効" : "認証 無効") : "認証 未設定";
-  const memberCount = Number(guild.member_count ?? 0);
-  return memberCount > 0 ? `${statusText} / ${formatCompactNumber(memberCount)}メンバー` : statusText;
+  return "BOT導入済み / 管理権限あり";
 }
 
 function renderGuardFeatureList() {
@@ -2752,7 +2763,7 @@ function renderGuardVerification() {
     <section class="settings-panel guard-verification-panel" id="guard-verification-settings">
       <div class="settings-panel__header">
         <div class="panel-heading">${icon("lock")}<h2>認証設定</h2></div>
-        <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "API接続済み" : "API未接続"}</span>
+        <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "設定可能" : "未接続"}</span>
       </div>
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>サーバーごとに認証ボタン、ログチャンネル、付与ロール、同一端末検知時の処置を設定します。</span>
@@ -2948,7 +2959,24 @@ function guardVerificationGuilds() {
 }
 
 function guardVerificationSelectedGuild() {
-  return guardVerificationGuilds().find((guild) => guild.id === state.guard.verificationForm.guild_id) ?? null;
+  return guardConfigurableGuilds().find((guild) => guild.id === state.guard.verificationForm.guild_id) ?? null;
+}
+
+function guardConfigurableGuilds() {
+  const guardGuildsById = new Map(guardVerificationGuilds().map((guild) => [guild.id, guild]));
+  if (!state.user || state.guilds.length === 0) {
+    return [...guardGuildsById.values()];
+  }
+  const filteredGuilds = state.guilds
+    .filter((guild) => guild.can_manage && guardGuildsById.has(guild.id))
+    .map((guild) => ({
+      ...guardGuildsById.get(guild.id),
+      ...guild,
+      bot_present: true,
+      can_manage: true,
+      icon_url: guild.icon_url || guardGuildsById.get(guild.id)?.icon_url || null,
+    }));
+  return filteredGuilds;
 }
 
 function renderGuardSettings() {
