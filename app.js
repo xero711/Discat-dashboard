@@ -26,7 +26,7 @@ const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api
 const TURNSTILE_PROOF_STORAGE_KEY = "discat_one_turnstile_proof";
 const MASCOT_URL = "./assets/discat-mascot.png";
 const GUARD_ICON_URL = "./assets/guard-site-icon.png";
-const DASHBOARD_OG_IMAGE_URL = "https://xero-x.me/Discat-dashboard/assets/og-image.png?v=20260513-main-og-1";
+const DASHBOARD_OG_IMAGE_URL = "https://xero-x.me/Discat-dashboard/assets/og-image.png?v=20260513-main-og-2";
 const ONE_OG_IMAGE_URL = DASHBOARD_OG_IMAGE_URL;
 const GUARD_OG_IMAGE_URL = DASHBOARD_OG_IMAGE_URL;
 const SUPPORT_SERVER_URL = "https://discord.gg/6ZzGvfnhRn";
