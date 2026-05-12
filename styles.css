@@ -2695,11 +2695,11 @@ input[type="checkbox"]:checked::before {
 }
 
 .workspace--guard {
-  min-height: 700px;
+  min-height: auto;
 }
 
 .workspace-layout--guard {
-  grid-template-columns: minmax(220px, 0.22fr) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
 }
 
 .workspace-layout--guard-auth {
@@ -2973,6 +2973,31 @@ input[type="checkbox"]:checked::before {
 
 .guard-verification-form {
   align-items: end;
+}
+
+.guard-selected-server {
+  align-content: center;
+}
+
+.guard-selected-server strong,
+.guard-selected-server small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guard-selected-server strong {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  font-weight: 840;
+}
+
+.guard-selected-server small {
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
 }
 
 .guard-verification-toggle {

@@ -163,7 +163,8 @@ const GUARD_FEATURES = [
   {
     id: "verification",
     label: "認証",
-    description: "認証ボタン、認証ログ、付与ロール、同一端末の別アカウント検知を設定します。",
+    description: "認証ボタン、付与ロール、同一端末検知時の処置を設定します。",
+    help: "サーバーごとに認証ボタン、ログチャンネル、付与ロール、同一端末検知時の処置を設定します。",
     icon: "lock",
   },
 ];
@@ -260,14 +261,13 @@ const state = {
     events: GUARD_SAMPLE_EVENTS,
     loading: false,
     loadedAt: null,
+    activeFeature: "verification",
     source: "sample",
     status: normalizeGuardStatus(null),
     verificationSettings: [],
     verificationOptions: null,
     verificationOptionsError: null,
     verificationRecords: [],
-    privateRecords: [],
-    privateRecordsLoading: false,
     verificationSaving: false,
     verificationMessage: null,
     verificationError: null,
@@ -503,10 +503,10 @@ function validateGuardApiBase(value) {
   try {
     url = new URL(raw);
   } catch {
-    return "API Base URLは http:// または https:// から始まるURLを入力してください。";
+    return "Guard API URLは http:// または https:// から始まるURLを入力してください。";
   }
   if (!["http:", "https:"].includes(url.protocol)) {
-    return "API Base URLは http:// または https:// から始まるURLを入力してください。";
+    return "Guard API URLは http:// または https:// から始まるURLを入力してください。";
   }
   if (window.location.protocol === "https:" && url.protocol !== "https:" && !isLocalDashboardOrigin()) {
     return "GitHub PagesなどHTTPSのダッシュボードでは、https:// から始まるGuard API URLを指定してください。";
@@ -2150,12 +2150,10 @@ async function loadGuardData(options = {}) {
 
   if (state.guard.apiBase) {
     try {
-      const [healthResult, statusResult, eventResult, settingsResult, recordsResult, optionsResult] = await Promise.allSettled([
+      const [healthResult, statusResult, settingsResult, optionsResult] = await Promise.allSettled([
         guardFetchJson(guardApiUrl("/health")),
         guardFetchJson(guardApiUrl("/status")),
-        guardFetchJson(guardApiUrl("/events?limit=30")),
         guardFetchJson(guardApiUrl("/verification/settings")),
-        guardFetchJson(guardApiUrl("/verification/records?limit=30")),
         guardFetchJson(guardApiUrl("/verification/options")),
       ]);
       if (healthResult.status !== "fulfilled") {
@@ -2164,19 +2162,15 @@ async function loadGuardData(options = {}) {
       if (statusResult.status !== "fulfilled") {
         throw statusResult.reason;
       }
-      if (eventResult.status !== "fulfilled") {
-        throw eventResult.reason;
-      }
       if (requestId !== state.requestIds.guard) {
         return;
       }
       state.guard.health = healthResult.value;
       state.guard.status = normalizeGuardStatus(statusResult.value);
-      state.guard.events = normalizeGuardEvents(eventResult.value?.events);
+      state.guard.events = [];
       state.guard.verificationSettings =
         settingsResult.status === "fulfilled" ? normalizeGuardVerificationSettings(settingsResult.value?.settings) : [];
-      state.guard.verificationRecords =
-        recordsResult.status === "fulfilled" ? normalizeGuardVerificationRecords(recordsResult.value?.records) : [];
+      state.guard.verificationRecords = [];
       if (optionsResult.status === "fulfilled" && optionsResult.value) {
         state.guard.verificationOptions = normalizeGuardVerificationOptions(optionsResult.value);
         state.guard.verificationOptionsError = null;
@@ -2206,7 +2200,7 @@ async function loadGuardData(options = {}) {
   if (requestId !== state.requestIds.guard) {
     return;
   }
-  state.guard.events = GUARD_SAMPLE_EVENTS;
+  state.guard.events = [];
   state.guard.loadedAt = new Date().toISOString();
   if (!state.guard.apiBase) {
     state.guard.source = "sample";
@@ -2334,6 +2328,7 @@ function normalizeGuardVerificationOptions(payload) {
     guilds: guilds.map((guild) => ({
       id: String(guild?.id ?? ""),
       name: String(guild?.name ?? "Unknown Guild"),
+      icon_url: normalizeNullableString(guild?.icon_url),
       member_count: Number(guild?.member_count ?? 0),
       text_channels: Array.isArray(guild?.text_channels)
         ? guild.text_channels.map((channel) => ({
@@ -2414,22 +2409,131 @@ function guardStatusClass() {
 }
 
 function renderGuardDashboard() {
+  const feature = activeGuardFeature();
+  const selectedGuild = guardVerificationSelectedGuild();
+  const pageTitle = selectedGuild?.name ?? (guardVerificationGuilds().length ? "サーバーを選択" : "サーバー未取得");
   return `
-    <div class="dashboard-grid dashboard-grid--guard dashboard-grid--guard-auth">
+    <div class="dashboard-grid dashboard-grid--guard">
+      ${renderGuardGuildList()}
       <div class="workspace workspace--guard">
-        <div class="workspace-layout workspace-layout--guard workspace-layout--guard-auth">
+        <div class="workspace-layout workspace-layout--guard">
+          ${renderGuardFunctionSidebar()}
           <div class="workspace-main">
             <div class="workspace__title">
-              <span>Guardで使う機能</span>
-              <h2>機能一覧</h2>
+              <span>${escapeHtml(feature.label)}</span>
+              <h2>${escapeHtml(pageTitle)}</h2>
             </div>
-            ${renderGuardFeatureList()}
-            ${renderGuardVerification()}
+            ${renderGuardFeatureContent(feature)}
           </div>
         </div>
       </div>
     </div>
   `;
+}
+
+function activeGuardFeature() {
+  return GUARD_FEATURES.find((feature) => feature.id === state.guard.activeFeature) ?? GUARD_FEATURES[0];
+}
+
+function renderGuardFeatureContent(feature) {
+  if (feature?.id === "verification") {
+    return renderGuardVerification();
+  }
+  return `
+    <section class="settings-panel empty-state">
+      ${icon("settings")}
+      <strong>この機能はまだ準備中です。</strong>
+      <span>Guard機能を追加するとここに設定画面が表示されます。</span>
+    </section>
+  `;
+}
+
+function renderGuardFunctionSidebar() {
+  return `
+    <aside class="function-sidebar" aria-label="Guard機能メニュー">
+      <div class="function-sidebar__label">Guard機能</div>
+      <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="Guard機能">
+        ${GUARD_FEATURES.map(renderGuardFunctionNavItem).join("")}
+      </div>
+    </aside>
+  `;
+}
+
+function renderGuardFunctionNavItem(feature) {
+  const active = activeGuardFeature().id === feature.id;
+  return `
+    <div class="function-nav-entry">
+      <button class="function-nav-item ${active ? "function-nav-item--active" : ""}" type="button" role="tab" aria-selected="${active}" data-guard-feature="${escapeAttribute(feature.id)}">
+        ${icon(feature.icon)}
+        <span class="function-nav-item__body">
+          <strong>${escapeHtml(feature.label)}</strong>
+          <span>${escapeHtml(feature.description)}</span>
+        </span>
+      </button>
+      ${renderInfoPopover(feature.help, `${feature.label}の説明`)}
+    </div>
+  `;
+}
+
+function renderGuardGuildList() {
+  const guilds = guardVerificationGuilds();
+  const selectedGuild = guardVerificationSelectedGuild();
+  const guildListExpanded = !state.guildListCollapsed;
+  return `
+    <aside class="guild-list ${state.guildListCollapsed ? "guild-list--collapsed" : ""}" aria-label="Guardサーバー">
+      <div class="guild-list__header">
+        <div class="panel-heading">
+          ${icon("server")}<h2>サーバー</h2>
+        </div>
+        <button class="guild-list__toggle" type="button" data-action="toggle-guild-list" aria-expanded="${guildListExpanded}" aria-controls="guard-guild-list-body">
+          <span>${guildListExpanded ? "閉じる" : "開く"}</span>${icon(guildListExpanded ? "chevronUp" : "chevronDown")}
+        </button>
+      </div>
+      <div class="guild-list__mobile-summary">
+        <span>選択中</span>
+        <strong>${escapeHtml(selectedGuild?.name ?? "サーバー未選択")}</strong>
+        <small>設定可能 ${guilds.length}</small>
+      </div>
+      <div class="guild-list__body" id="guard-guild-list-body">
+        ${renderGuildSection(
+          "設定可能",
+          guilds.length,
+          guilds.length > 0
+            ? guilds.map(renderGuardSelectableGuild).join("")
+            : `<div class="empty-state">Guard APIからサーバーを取得できませんでした。</div>`,
+        )}
+      </div>
+    </aside>
+  `;
+}
+
+function renderGuardSelectableGuild(guild) {
+  const active = state.guard.verificationForm.guild_id === guild.id;
+  return `
+    <button class="guild-row ${active ? "guild-row--selected" : ""}" type="button" data-guard-guild-id="${escapeAttribute(guild.id)}">
+      ${renderGuardGuildIcon(guild)}
+      <span class="guild-row__body">
+        <span class="guild-row__name">${escapeHtml(guild.name)}</span>
+        <span class="guild-row__meta">${escapeHtml(guardGuildMeta(guild))}</span>
+      </span>
+      ${icon("shield", "Guard設定対象")}
+    </button>
+  `;
+}
+
+function renderGuardGuildIcon(guild) {
+  if (guild.icon_url) {
+    return `<img class="guild-row__icon" src="${escapeAttribute(guild.icon_url)}" alt="" />`;
+  }
+  return `<span class="guild-row__icon guild-row__icon--fallback">${escapeHtml((guild.name || "?").slice(0, 1))}</span>`;
+}
+
+function guardGuildMeta(guild) {
+  const settings = state.guard.verificationSettings.find((item) => item.guild_id === guild.id);
+  const configured = Boolean(settings?.button_channel_id && settings?.log_channel_id && settings?.role_id);
+  const statusText = configured ? (settings.enabled ? "認証 有効" : "認証 無効") : "認証 未設定";
+  const memberCount = Number(guild.member_count ?? 0);
+  return memberCount > 0 ? `${statusText} / ${formatCompactNumber(memberCount)}メンバー` : statusText;
 }
 
 function renderGuardFeatureList() {
@@ -2642,10 +2746,7 @@ function renderGuardEventRow(event) {
 
 function renderGuardVerification() {
   const form = state.guard.verificationForm;
-  const guilds = guardVerificationGuilds();
   const selectedGuild = guardVerificationSelectedGuild();
-  const publicRecords = guardVerificationRecordsForGuild(state.guard.verificationRecords);
-  const privateRecords = guardVerificationRecordsForGuild(state.guard.privateRecords);
   return `
     ${renderGuardApiNotice()}
     <section class="settings-panel guard-verification-panel" id="guard-verification-settings">
@@ -2659,14 +2760,13 @@ function renderGuardVerification() {
       ${state.guard.verificationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.verificationError)}</span></p>` : ""}
       ${state.guard.verificationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.verificationMessage)}</span></p>` : ""}
       <form class="settings-grid guard-verification-form" data-guard-verification-form>
-        <label class="field">
-          <span>API Base URL</span>
-          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(state.guard.apiBase || "")}" placeholder="${escapeAttribute(defaultGuardApiBase())}" />
-        </label>
-        ${renderGuardApiHint()}
-        ${renderGuardVerificationGuildField(guilds, form.guild_id)}
+        <div class="field guard-selected-server">
+          <span>選択中のサーバー</span>
+          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
+        </div>
         ${renderGuardVerificationChannelField("button_channel_id", "認証ボタン配置チャンネル", form.button_channel_id, selectedGuild)}
-        ${renderGuardVerificationChannelField("log_channel_id", "認証ログチャンネル", form.log_channel_id, selectedGuild)}
+        ${renderGuardVerificationChannelField("log_channel_id", "ログチャンネル", form.log_channel_id, selectedGuild)}
         ${renderGuardVerificationRoleField(form.role_id, selectedGuild)}
         <label class="field">
           <span>重複検知時の処置</span>
@@ -2679,11 +2779,8 @@ function renderGuardVerification() {
           <span>認証機能を有効にする</span>
         </label>
         <div class="feature-card__actions guard-verification-actions">
-          <button class="icon-button icon-button--primary" type="submit" ${state.guard.verificationSaving || !state.guard.apiBase ? "disabled" : ""}>
+          <button class="icon-button icon-button--primary" type="submit" ${state.guard.verificationSaving || !state.guard.apiBase || !form.guild_id ? "disabled" : ""}>
             ${icon("save")}<span>${state.guard.verificationSaving ? "保存中" : "保存"}</span>
-          </button>
-          <button class="icon-button icon-button--ghost" type="button" data-action="guard-save-api">
-            ${icon("link")}<span>接続</span>
           </button>
           <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-verification-options" ${!state.guard.apiBase ? "disabled" : ""}>
             ${icon("refresh")}<span>候補を取得</span>
@@ -2691,29 +2788,6 @@ function renderGuardVerification() {
         </div>
       </form>
       ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネルとロール候補を取得できませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
-      ${renderGuardVerificationServerSettings(guilds)}
-    </section>
-    <section class="guard-panel-grid">
-      <div class="settings-panel">
-        <div class="settings-panel__header">
-          <div class="panel-heading">${icon("activity")}<h2>認証ログ</h2></div>
-          <span class="feature-status">${publicRecords.length}件</span>
-        </div>
-        <div class="guard-verification-records">
-          ${publicRecords.length ? publicRecords.map(renderGuardVerificationRecord).join("") : renderGuardVerificationEmpty("認証ログはまだありません。")}
-        </div>
-      </div>
-      <div class="settings-panel">
-        <div class="settings-panel__header">
-          <div class="panel-heading">${icon("shield")}<h2>IP確認</h2></div>
-          <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-private-records" ${state.guard.privateRecordsLoading || !state.guard.apiBase ? "disabled" : ""}>
-            ${icon("lock")}<span>${state.guard.privateRecordsLoading ? "取得中" : "IPを表示"}</span>
-          </button>
-        </div>
-        <div class="guard-verification-records guard-verification-records--private">
-          ${privateRecords.length ? privateRecords.map(renderGuardVerificationPrivateRecord).join("") : renderGuardVerificationEmpty("IP一覧はボタンを押すまで表示されません。")}
-        </div>
-      </div>
     </section>
   `;
 }
@@ -2827,36 +2901,6 @@ function roleNameForGuard(guild, roleId) {
   return role ? `@${role.name}` : String(roleId);
 }
 
-function renderGuardVerificationRecord(record) {
-  const duplicateClass = record.duplicate_detected ? "guard-verification-record--warning" : "";
-  const duplicateText = record.duplicate_detected
-    ? `重複: ${record.duplicate_user_ids.length ? record.duplicate_user_ids.join(", ") : "検出"}`
-    : "重複なし";
-  return `
-    <article class="guard-verification-record ${duplicateClass}">
-      <span class="guard-event-row__icon">${icon(record.duplicate_detected ? "alert" : "success")}</span>
-      <span>
-        <strong>${escapeHtml(guardVerificationUserLabel(record))}</strong>
-        <small>${escapeHtml(duplicateText)} / 端末 ${escapeHtml(record.device_fingerprint_preview || "未取得")} / ${escapeHtml(guardVerificationActionLabel(record.action_taken))}</small>
-        <small>${formatDateTime(record.created_at)} / ${escapeHtml(record.status)}</small>
-      </span>
-    </article>
-  `;
-}
-
-function renderGuardVerificationPrivateRecord(record) {
-  return `
-    <article class="guard-verification-record guard-verification-record--private">
-      <span class="guard-event-row__icon">${icon("lock")}</span>
-      <span>
-        <strong>${escapeHtml(guardVerificationUserLabel(record))}</strong>
-        <small>IP: ${escapeHtml(record.ip_address || "未取得")} / 端末 ${escapeHtml(record.device_fingerprint_preview || "未取得")}</small>
-        <small>${formatDateTime(record.created_at)}</small>
-      </span>
-    </article>
-  `;
-}
-
 function renderGuardVerificationEmpty(message) {
   return `
     <div class="guard-verification-empty">
@@ -2872,13 +2916,32 @@ function guardVerificationGuilds() {
   });
   (state.guard.status.guilds ?? []).forEach((guild) => {
     const id = String(guild?.id ?? "");
-    if (id && !map.has(id)) {
-      map.set(id, { id, name: String(guild?.name ?? id), text_channels: [], roles: [] });
+    if (!id) {
+      return;
+    }
+    const current = map.get(id);
+    const statusGuild = {
+      id,
+      name: String(guild?.name ?? id),
+      icon_url: normalizeNullableString(guild?.icon_url),
+      member_count: Number(guild?.member_count ?? 0),
+      text_channels: [],
+      roles: [],
+    };
+    if (current) {
+      map.set(id, {
+        ...statusGuild,
+        ...current,
+        icon_url: current.icon_url || statusGuild.icon_url,
+        member_count: current.member_count || statusGuild.member_count,
+      });
+    } else {
+      map.set(id, statusGuild);
     }
   });
   state.guard.verificationSettings.forEach((settings) => {
     if (settings.guild_id && !map.has(settings.guild_id)) {
-      map.set(settings.guild_id, { id: settings.guild_id, name: settings.guild_id, text_channels: [], roles: [] });
+      map.set(settings.guild_id, { id: settings.guild_id, name: settings.guild_id, icon_url: null, member_count: 0, text_channels: [], roles: [] });
     }
   });
   return [...map.values()];
@@ -2888,73 +2951,8 @@ function guardVerificationSelectedGuild() {
   return guardVerificationGuilds().find((guild) => guild.id === state.guard.verificationForm.guild_id) ?? null;
 }
 
-function guardVerificationRecordsForGuild(records) {
-  const guildId = state.guard.verificationForm.guild_id;
-  return guildId ? records.filter((record) => record.guild_id === guildId) : records;
-}
-
-function guardVerificationUserLabel(record) {
-  return record.display_name || record.user_name || record.user_id || "Unknown User";
-}
-
-function guardVerificationActionLabel(value) {
-  const labels = {
-    notify: "通知のみ",
-    kick: "キック",
-    ban: "BAN",
-    role_added: "ロール付与",
-    pending: "処置待ち",
-    none: "処置なし",
-    error: "エラー",
-  };
-  return labels[String(value ?? "").toLowerCase()] ?? String(value ?? "未設定");
-}
-
 function renderGuardSettings() {
-  const source = state.guard.apiBase || "";
-  return `
-    <section class="settings-panel">
-      <div class="settings-panel__header">
-        <div class="panel-heading">${icon("settings")}<h2>Guard API</h2></div>
-        <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${escapeHtml(guardSourceText())}</span>
-      </div>
-      <form class="settings-grid guard-api-form" data-guard-api-form>
-        <label class="field">
-          <span>API Base URL</span>
-          <input id="guardApiBaseInput" type="url" value="${escapeAttribute(source)}" placeholder="${escapeAttribute(defaultGuardApiBase())}" />
-        </label>
-        <div class="feature-card__actions">
-          <button class="icon-button icon-button--primary" type="submit">${icon("save")}<span>保存して接続</span></button>
-          <button class="icon-button icon-button--ghost" type="button" data-action="guard-clear-api">${icon("trash")}<span>サンプル表示</span></button>
-        </div>
-      </form>
-      ${state.guard.apiError ? `<p class="status-banner status-banner--error guard-api-notice">${icon("alert")}<span>${escapeHtml(state.guard.apiError)}</span></p>` : ""}
-      <div class="guard-panel-grid">
-        <section class="feature-card">
-          <div class="feature-card__header">
-            <div class="panel-heading">${icon("radio")}<h2>接続</h2></div>
-          </div>
-          ${renderDetailList([
-            ["Health", state.guard.health?.status || "未取得"],
-            ["Contract", state.guard.health?.api_contract_version || "未取得"],
-            ["状態API", state.guard.apiBase ? `${state.guard.apiBase}/status` : "未設定"],
-            ["イベントAPI", state.guard.apiBase ? `${state.guard.apiBase}/events` : "未設定"],
-          ])}
-        </section>
-        <section class="feature-card">
-          <div class="feature-card__header">
-            <div class="panel-heading">${icon("shield")}<h2>Guard</h2></div>
-          </div>
-          ${renderDetailList([
-            ["監査ログ", state.guard.status.security_log_path],
-            ["ログ機能", state.guard.status.security_log_enabled ? "有効" : "無効"],
-            ["最終更新", formatDateTime(state.guard.loadedAt)],
-            ["表示元", guardSourceText()],
-          ])}
-        </section>
-      </div>
-    </section>
-  `;
+  return renderGuardVerification();
 }
 
 function saveGuardApiBase() {
@@ -2972,8 +2970,8 @@ function saveGuardApiBase() {
   state.guard.apiError = null;
   state.guard.verificationError = null;
   state.guard.verificationMessage = value
-    ? "Guard API Base URLを保存しました。"
-    : "Guard API Base URLをクリアしました。";
+    ? "Guard API URLを保存しました。"
+    : "Guard API URLをクリアしました。";
   try {
     if (value) {
       localStorage.setItem(GUARD_API_BASE_STORAGE_KEY, value);
@@ -2990,7 +2988,7 @@ function clearGuardApiBase() {
   state.guard.apiBase = "";
   state.guard.apiError = null;
   state.guard.verificationError = null;
-  state.guard.verificationMessage = "Guard API Base URLをクリアしました。";
+  state.guard.verificationMessage = "Guard API URLをクリアしました。";
   try {
     localStorage.removeItem(GUARD_API_BASE_STORAGE_KEY);
   } catch {
@@ -3008,7 +3006,6 @@ function updateGuardVerificationField(target, options = { renderAfter: true }) {
     const guildId = target.value;
     if (options.renderAfter) {
       applyGuardVerificationSettingsForGuild(guildId);
-      state.guard.privateRecords = [];
       render();
     } else {
       state.guard.verificationForm = { ...state.guard.verificationForm, guild_id: guildId };
@@ -3029,16 +3026,16 @@ function updateGuardVerificationField(target, options = { renderAfter: true }) {
 
 function refreshGuardVerificationOwnerControls() {
   const disabled = !state.guard.apiBase;
-  root.querySelectorAll('[data-action="guard-load-verification-options"], [data-action="guard-load-private-records"]').forEach((button) => {
+  root.querySelectorAll('[data-action="guard-load-verification-options"]').forEach((button) => {
     if (button instanceof HTMLButtonElement) {
-      button.disabled = disabled || (button.dataset.action === "guard-load-private-records" && state.guard.privateRecordsLoading);
+      button.disabled = disabled;
     }
   });
 }
 
 async function saveGuardVerificationSettings() {
   if (!state.guard.apiBase) {
-    state.guard.verificationError = "Guard API Base URLを設定してください。";
+    state.guard.verificationError = "Guard APIに接続できません。";
     render();
     return;
   }
@@ -3083,7 +3080,7 @@ async function saveGuardVerificationSettings() {
 
 async function loadGuardVerificationOptions() {
   if (!state.guard.apiBase) {
-    state.guard.verificationError = "Guard API Base URLを設定してください。";
+    state.guard.verificationError = "Guard APIに接続できません。";
     render();
     return;
   }
@@ -3098,29 +3095,6 @@ async function loadGuardVerificationOptions() {
     state.guard.verificationOptionsError = error instanceof Error ? error.message : String(error);
   }
   render();
-}
-
-async function loadGuardVerificationPrivateRecords() {
-  if (!state.guard.apiBase) {
-    state.guard.verificationError = "Guard API Base URLを設定してください。";
-    render();
-    return;
-  }
-  state.guard.privateRecordsLoading = true;
-  state.guard.verificationError = null;
-  render();
-  try {
-    const guildId = state.guard.verificationForm.guild_id;
-    const query = guildId ? `?guild_id=${encodeURIComponent(guildId)}&limit=30` : "?limit=30";
-    const payload = await guardFetchJson(guardApiUrl(`/verification/private-records${query}`));
-    state.guard.privateRecords = normalizeGuardVerificationRecords(payload?.records);
-    state.guard.verificationMessage = "IP一覧を取得しました。";
-  } catch (error) {
-    state.guard.verificationError = error instanceof Error ? error.message : String(error);
-  } finally {
-    state.guard.privateRecordsLoading = false;
-    render();
-  }
 }
 
 function guardEventLevel(value) {
@@ -4633,19 +4607,14 @@ function handleClick(event) {
     const action = actionEl.dataset.action;
     if (action === "switch-product") {
       void activateProduct(actionEl.dataset.product);
-    } else if (action === "guard-save-api") {
-      saveGuardApiBase();
     } else if (action === "guard-clear-api") {
       clearGuardApiBase();
     } else if (action === "guard-load-verification-options") {
       void loadGuardVerificationOptions();
-    } else if (action === "guard-load-private-records") {
-      void loadGuardVerificationPrivateRecords();
     } else if (action === "guard-edit-verification-guild") {
       const guildId = actionEl.dataset.guardGuildId;
       if (guildId) {
         applyGuardVerificationSettingsForGuild(guildId);
-        state.guard.privateRecords = [];
         render();
       }
     } else if (action === "login") {
@@ -4753,12 +4722,33 @@ function handleClick(event) {
     return;
   }
 
+  const guardFeatureEl = target.closest("[data-guard-feature]");
+  if (guardFeatureEl && state.activeProduct === "guard") {
+    const featureId = guardFeatureEl.dataset.guardFeature;
+    if (GUARD_FEATURES.some((feature) => feature.id === featureId)) {
+      state.guard.activeFeature = featureId;
+      render();
+    }
+    return;
+  }
+
   const activityPeriodEl = target.closest("[data-activity-period]");
   if (activityPeriodEl) {
     state.activeActivityPeriod = ACTIVITY_PERIODS.some((period) => period.id === activityPeriodEl.dataset.activityPeriod)
       ? activityPeriodEl.dataset.activityPeriod
       : "daily";
     render();
+    return;
+  }
+
+  const guardGuildEl = target.closest("[data-guard-guild-id]");
+  if (guardGuildEl && state.activeProduct === "guard") {
+    const guildId = guardGuildEl.dataset.guardGuildId;
+    if (guildId && guildId !== state.guard.verificationForm.guild_id) {
+      applyGuardVerificationSettingsForGuild(guildId);
+      state.guildListCollapsed = true;
+      render();
+    }
     return;
   }
 
