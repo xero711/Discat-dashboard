@@ -193,37 +193,37 @@ body.body--guard.body--status-only .app-shell--guard {
 }
 
 .app-shell--product-to-guard {
-  --product-content-shift: 28px;
-  --product-wash-end: 84px;
-  --product-wash-start: -84px;
+  --product-content-shift: 12px;
+  --product-wash-end: 44px;
+  --product-wash-start: -44px;
   --product-transition-wash: rgba(20, 182, 218, 0.38);
 }
 
 .app-shell--product-to-one {
-  --product-content-shift: -28px;
-  --product-wash-end: -84px;
-  --product-wash-start: 84px;
+  --product-content-shift: -12px;
+  --product-wash-end: -44px;
+  --product-wash-start: 44px;
   --product-transition-wash: rgba(255, 119, 200, 0.32);
 }
 
 .app-shell--product-transition::after {
-  animation: product-switch-wash 900ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: product-switch-wash 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  will-change: opacity, transform;
 }
 
 .app-shell--product-transition .topbar {
-  animation: product-topbar-in 640ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: product-topbar-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  will-change: opacity, transform;
 }
 
 .app-shell--product-transition .dashboard {
-  animation: product-dashboard-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: product-dashboard-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: opacity, transform;
 }
 
 .app-shell--product-transition .brand__mascot {
-  animation: product-icon-swap 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.app-shell--product-transition .product-switcher__item--active {
-  animation: product-tab-confirm 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: product-icon-swap 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
 }
 
 .topbar {
@@ -2671,56 +2671,35 @@ input[type="checkbox"]:checked::before {
 
 @keyframes product-dashboard-in {
   0% {
-    opacity: 0.16;
-    filter: blur(8px);
-    transform: translateX(var(--product-content-shift)) scale(0.985);
-  }
-
-  55% {
-    opacity: 1;
-    filter: blur(0);
+    opacity: 0.72;
+    transform: translate3d(var(--product-content-shift), 0, 0);
   }
 
   100% {
     opacity: 1;
-    filter: blur(0);
-    transform: translateX(0) scale(1);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes product-topbar-in {
   0% {
-    opacity: 0.46;
-    transform: translateY(-10px);
+    opacity: 0.8;
+    transform: translate3d(0, -4px, 0);
   }
 
   100% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes product-icon-swap {
   0% {
-    transform: scale(0.82) rotate(-7deg);
-  }
-
-  48% {
-    transform: scale(1.12) rotate(3deg);
-  }
-
-  100% {
-    transform: scale(1) rotate(0);
-  }
-}
-
-@keyframes product-tab-confirm {
-  0% {
     transform: scale(0.94);
   }
 
-  50% {
-    transform: scale(1.08);
+  52% {
+    transform: scale(1.03);
   }
 
   100% {
@@ -2731,16 +2710,16 @@ input[type="checkbox"]:checked::before {
 @keyframes product-switch-wash {
   0% {
     opacity: 0;
-    transform: translateX(var(--product-wash-start));
+    transform: translate3d(var(--product-wash-start), 0, 0);
   }
 
   34% {
-    opacity: 0.82;
+    opacity: 0.52;
   }
 
   100% {
     opacity: 0;
-    transform: translateX(var(--product-wash-end));
+    transform: translate3d(var(--product-wash-end), 0, 0);
   }
 }
 
@@ -3700,11 +3679,12 @@ input[type="checkbox"]:checked::before {
   *,
   *::before,
   *::after {
+    animation: none !important;
     scroll-behavior: auto !important;
     transition: none !important;
   }
 
-  .playlist-track-row--playing .playlist-record {
-    animation: none !important;
+  .app-shell--product-transition::after {
+    opacity: 0 !important;
   }
 }

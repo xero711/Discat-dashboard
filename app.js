@@ -20,12 +20,11 @@ const SERVICE_STATUS_TIMEOUT_MS = 10000;
 const SERVICE_STATUS_REFRESH_INTERVAL_MS = 30000;
 const GUARD_STATUS_REFRESH_INTERVAL_MS = SERVICE_STATUS_REFRESH_INTERVAL_MS;
 const HOST_REFRESH_INTERVAL_MS = 5000;
-const PRODUCT_TRANSITION_MS = 900;
 const PLAYLIST_PREVIEW_DURATION_SECONDS = 15;
 const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 const TURNSTILE_PROOF_STORAGE_KEY = "discat_one_turnstile_proof";
 const MASCOT_URL = "./assets/discat-mascot.png";
-const GUARD_ICON_URL = "./assets/guard-site-icon.png";
+const GUARD_MASCOT_URL = "./assets/discatGuard-mascot.png";
 const DASHBOARD_OG_IMAGE_URL = "https://xero-x.me/Discat-dashboard/assets/og-image.png";
 const ONE_OG_IMAGE_URL = DASHBOARD_OG_IMAGE_URL;
 const GUARD_OG_IMAGE_URL = DASHBOARD_OG_IMAGE_URL;
@@ -162,7 +161,7 @@ const PRODUCT_META = {
     label: "Discat Guard",
     shortLabel: "Guard",
     subtitle: "セキュリティダッシュボード",
-    iconUrl: GUARD_ICON_URL,
+    iconUrl: GUARD_MASCOT_URL,
   },
 };
 
@@ -312,7 +311,6 @@ let serviceStatusRefreshTimerId = null;
 let guardStatusRefreshTimerId = null;
 let turnstileScriptPromise = null;
 let playlistAnimationFrameId = null;
-let productTransitionRunId = 0;
 let lastPlaylistPointerToggleTrackId = "";
 let lastPlaylistPointerToggleAt = 0;
 root.addEventListener("pointerdown", handlePointerDown);
@@ -569,11 +567,15 @@ async function activateProduct(productId) {
   writeProductPreference(nextProduct);
   stopOneAutoRefresh();
   stopGuardAutoRefresh();
+  if (nextProduct === "guard") {
+    state.security.loading = true;
+    state.security.error = null;
+  }
   renderProductTransition(previousProduct, nextProduct);
 
   if (nextProduct === "guard") {
     await Promise.all([
-      loadTurnstileConfig(),
+      loadTurnstileConfig({ silent: true, renderAfter: false }),
       loadGuardAccountContext({ silent: true, renderAfter: false }),
       loadGuardData({ silent: true, renderAfter: false }),
     ]);
@@ -586,25 +588,8 @@ async function activateProduct(productId) {
 }
 
 function renderProductTransition(fromProduct, toProduct) {
-  const from = normalizeProductId(fromProduct) ?? "one";
-  const to = normalizeProductId(toProduct) ?? "one";
-  const runId = productTransitionRunId + 1;
-  productTransitionRunId = runId;
-  state.productTransition = { from, to };
+  state.productTransition = null;
   render();
-
-  window.setTimeout(() => {
-    if (runId !== productTransitionRunId) {
-      return;
-    }
-    state.productTransition = null;
-    const shell = root.querySelector(".app-shell");
-    shell?.classList.remove(
-      "app-shell--product-transition",
-      `app-shell--product-from-${from}`,
-      `app-shell--product-to-${to}`,
-    );
-  }, PRODUCT_TRANSITION_MS);
 }
 
 async function loadOneDashboardData() {
@@ -654,12 +639,14 @@ function updateDocumentForProduct() {
   setMetaContent("og:description", description, "property");
   setMetaContent("og:url", shareUrl, "property");
   setMetaContent("og:image", ogImage, "property");
+  setMetaContent("og:image:url", ogImage, "property");
   setMetaContent("og:image:secure_url", ogImage, "property");
   setMetaContent("og:image:alt", `${product.label} Dashboard`, "property");
   setMetaContent("twitter:title", `${product.label} Dashboard`);
   setMetaContent("twitter:description", description);
   setMetaContent("twitter:image", ogImage);
-  setSiteIcon(isGuard ? GUARD_ICON_URL : "./assets/favicon.ico?v=20260510-site-icon-1");
+  setMetaContent("twitter:image:src", ogImage);
+  setSiteIcon(isGuard ? GUARD_MASCOT_URL : MASCOT_URL);
   document.body.classList.toggle("body--guard", isGuard);
 }
 
@@ -1892,10 +1879,12 @@ async function logout() {
   resetSessionState();
 }
 
-async function loadTurnstileConfig() {
+async function loadTurnstileConfig(options = {}) {
   state.security.loading = true;
   state.security.error = null;
-  render();
+  if (!options.silent) {
+    render();
+  }
   try {
     const config = await api.turnstileConfig();
     state.security.enabled = Boolean(config?.enabled);
@@ -1916,7 +1905,9 @@ async function loadTurnstileConfig() {
     state.security.error = null;
   } finally {
     state.security.loading = false;
-    render();
+    if (options.renderAfter !== false) {
+      render();
+    }
   }
 }
 
@@ -2096,11 +2087,14 @@ function render() {
     shellClasses.push("app-shell--guard");
   }
   if (state.productTransition) {
+    const transitionShouldAnimate = !state.productTransition.rendered;
     shellClasses.push(
-      "app-shell--product-transition",
       `app-shell--product-from-${state.productTransition.from}`,
       `app-shell--product-to-${state.productTransition.to}`,
     );
+    if (transitionShouldAnimate) {
+      shellClasses.push("app-shell--product-transition");
+    }
   }
   if (hasPendingNavigation() && hasUnsavedChanges()) {
     shellClasses.push("app-shell--with-unsaved-bar");
@@ -2116,6 +2110,9 @@ function render() {
     </div>
   `;
   updateDocumentForProduct();
+  if (state.productTransition && !state.productTransition.rendered) {
+    state.productTransition = { ...state.productTransition, rendered: true };
+  }
   document.body.classList.toggle("body--status-only", statusOnly);
   if (state.activeProduct === "one") {
     syncServiceStatusRefresh();
@@ -2844,7 +2841,7 @@ function renderGuardStatusRail() {
         <span class="feature-status ${status.online ? "feature-status--on" : ""}">${status.online ? "Online" : state.guard.source === "sample" ? "Sample" : "Offline"}</span>
       </div>
       <div class="guard-status-card">
-        <img class="guard-status-card__icon" src="${GUARD_ICON_URL}" alt="" />
+        <img class="guard-status-card__icon" src="${GUARD_MASCOT_URL}" alt="" />
         <div>
           <strong>${escapeHtml(status.bot_name)}</strong>
           <span>${escapeHtml(guardSourceText())}</span>
