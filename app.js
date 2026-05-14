@@ -3529,7 +3529,7 @@ function renderGuardModerationChannelField(featureId, selectedValue, guild) {
   if (!channels.length) {
     const optionText = selectedValue ? `保存済み: ${selectedValue}` : "Guard APIに接続すると選択できます";
     return `
-      <label class="field">
+      <label class="field guard-moderation-log-field">
         <span>処罰ログチャンネル</span>
         <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id" disabled>
           <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
@@ -3538,9 +3538,9 @@ function renderGuardModerationChannelField(featureId, selectedValue, guild) {
     `;
   }
   return `
-    <label class="field">
+    <label class="field guard-moderation-log-field">
       <span>処罰ログチャンネル</span>
-      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id">
+      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id" size="${Math.min(Math.max(channels.length + 1, 3), 5)}">
         <option value="">未設定</option>
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
       </select>

@@ -33,6 +33,12 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 html,
@@ -40,6 +46,20 @@ body,
 #root {
   min-height: 100%;
   margin: 0;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+html,
+body {
+  overflow-x: clip;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 body {
@@ -3179,19 +3199,20 @@ input[type="checkbox"]:checked::before {
 
 .guard-moderation-form {
   display: grid;
-  gap: 14px;
+  gap: 18px;
 }
 
 .guard-moderation-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
 }
 
 .guard-moderation-card {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 16px;
+  padding: 16px;
 }
 
 .guard-moderation-card__description {
@@ -3203,7 +3224,8 @@ input[type="checkbox"]:checked::before {
 }
 
 .guard-moderation-card__fields {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 14px;
 }
 
 .guard-moderation-card__fields.guard-logging-card__fields {
@@ -3211,11 +3233,27 @@ input[type="checkbox"]:checked::before {
 }
 
 .guard-moderation-card__fields .guard-verification-toggle {
-  min-height: 78px;
+  min-height: 70px;
+}
+
+.guard-moderation-log-field,
+.guard-moderation-channel-field {
+  grid-column: 1 / -1;
+  min-height: auto;
+  gap: 10px;
+  padding: 14px;
+}
+
+.guard-moderation-log-field select {
+  min-height: 118px;
+  padding: 8px 10px;
+  line-height: 1.55;
 }
 
 .guard-moderation-channel-field select[multiple] {
-  min-height: 104px;
+  min-height: 132px;
+  padding: 8px 10px;
+  line-height: 1.55;
 }
 
 .guard-moderation-channel-field small {
