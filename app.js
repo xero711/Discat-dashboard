@@ -25,6 +25,8 @@ const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api
 const TURNSTILE_PROOF_STORAGE_KEY = "discat_one_turnstile_proof";
 const MASCOT_URL = "./assets/discat-mascot.png";
 const GUARD_MASCOT_URL = "./assets/discatGuard-mascot.png";
+const ONE_SITE_ICON_URL = "./assets/apple-touch-icon.png";
+const GUARD_SITE_ICON_URL = "./assets/guard-site-icon.png";
 const DASHBOARD_OG_IMAGE_URL = "https://xero-x.me/Discat-dashboard/assets/og-image.png";
 const ONE_OG_IMAGE_URL = DASHBOARD_OG_IMAGE_URL;
 const GUARD_OG_IMAGE_URL = DASHBOARD_OG_IMAGE_URL;
@@ -779,7 +781,7 @@ function updateDocumentForProduct() {
   setMetaContent("twitter:description", description);
   setMetaContent("twitter:image", ogImage);
   setMetaContent("twitter:image:src", ogImage);
-  setSiteIcon(isGuard ? GUARD_MASCOT_URL : MASCOT_URL);
+  setSiteIcon(isGuard ? GUARD_SITE_ICON_URL : ONE_SITE_ICON_URL);
   document.body.classList.toggle("body--guard", isGuard);
 }
 
