@@ -3177,6 +3177,54 @@ input[type="checkbox"]:checked::before {
   align-items: end;
 }
 
+.guard-moderation-form {
+  display: grid;
+  gap: 14px;
+}
+
+.guard-moderation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.guard-moderation-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.guard-moderation-card__description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 680;
+  line-height: 1.55;
+}
+
+.guard-moderation-card__fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.guard-moderation-card__fields.guard-logging-card__fields {
+  grid-template-columns: 1fr;
+}
+
+.guard-moderation-card__fields .guard-verification-toggle {
+  min-height: 78px;
+}
+
+.guard-moderation-channel-field select[multiple] {
+  min-height: 104px;
+}
+
+.guard-moderation-channel-field small {
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
 .guard-selected-server {
   align-content: center;
 }
@@ -3231,11 +3279,6 @@ input[type="checkbox"]:checked::before {
 
 .guard-verification-toggle input[type="checkbox"]:checked::before {
   transform: translateX(20px);
-}
-
-.guard-verification-actions {
-  min-height: 86px;
-  align-content: end;
 }
 
 .guard-verification-server-list {
@@ -3437,6 +3480,8 @@ input[type="checkbox"]:checked::before {
   .host-metrics,
   .host-admin__grid,
   .guard-panel-grid,
+  .guard-moderation-grid,
+  .guard-moderation-card__fields,
   .guard-feature-index__list,
   .user-page__grid,
   .activity-metric-grid,

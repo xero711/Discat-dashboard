@@ -173,6 +173,20 @@ const GUARD_FEATURES = [
     help: "サーバーごとに認証ボタン、ログチャンネル、付与ロール、同一端末検知時の処置を設定します。",
     icon: "lock",
   },
+  {
+    id: "moderation",
+    label: "荒らし対策",
+    description: "招待リンク連投、外部リンク、スパム、暴言、下ネタの検知と処罰を設定します。",
+    help: "検知レベル、処罰内容、処罰ログ、検知対象チャンネルを機能ごとに設定します。",
+    icon: "shield",
+  },
+  {
+    id: "logging",
+    label: "ログ機能",
+    description: "参加、脱退、ロール付与、VC入退室、メッセージ削除・編集のログ送信先を設定します。",
+    help: "イベントごとに有効化とログを送るチャンネルを設定します。",
+    icon: "activity",
+  },
 ];
 
 const GUARD_FEATURE_ROWS = [
@@ -192,6 +206,104 @@ const GUARD_DUPLICATE_ACTIONS = [
   { id: "kick", label: "キック" },
   { id: "ban", label: "BAN" },
 ];
+
+const GUARD_MODERATION_FEATURES = [
+  {
+    id: "invite_spam",
+    label: "招待リンク連投",
+    description: "Discordサーバー招待リンクを一定ペース以上で送ったユーザーを検知します。",
+  },
+  {
+    id: "other_links",
+    label: "外部リンク遮断",
+    description: "Discord招待リンク以外のURL投稿を検知します。",
+  },
+  {
+    id: "spam",
+    label: "スパム検知",
+    description: "短時間の連投、同じ文面の繰り返し、大量メンションを検知します。",
+  },
+  {
+    id: "profanity",
+    label: "暴言禁止",
+    description: "攻撃的な言葉や暴言を検知して処罰します。",
+  },
+  {
+    id: "sexual_language",
+    label: "下ネタ禁止",
+    description: "性的な表現や下ネタを検知して処罰します。",
+  },
+];
+
+const GUARD_MODERATION_LEVELS = [
+  { id: "low", label: "低" },
+  { id: "medium", label: "標準" },
+  { id: "high", label: "高" },
+];
+
+const GUARD_MODERATION_ACTIONS = [
+  { id: "log", label: "ログのみ" },
+  { id: "delete", label: "メッセージ削除" },
+  { id: "kick", label: "キック" },
+  { id: "ban", label: "BAN" },
+];
+
+const GUARD_MODERATION_DEFAULTS = {
+  invite_spam: { enabled: true, level: "medium", action: "kick", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
+  other_links: { enabled: true, level: "high", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
+  spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
+  profanity: { enabled: true, level: "medium", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
+  sexual_language: { enabled: true, level: "medium", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
+};
+
+const GUARD_LOGGING_EVENTS = [
+  {
+    id: "member_joined",
+    label: "メンバー参加",
+    description: "サーバーにメンバーが参加した時に送信します。",
+    icon: "user",
+  },
+  {
+    id: "member_removed",
+    label: "メンバー脱退",
+    description: "サーバーからメンバーが脱退した時に送信します。",
+    icon: "logout",
+  },
+  {
+    id: "role_added",
+    label: "ロール付与",
+    description: "メンバーにロールが付与された時に送信します。",
+    icon: "shield",
+  },
+  {
+    id: "voice_joined",
+    label: "VC入室",
+    description: "メンバーがボイスチャンネルへ入室した時に送信します。",
+    icon: "radio",
+  },
+  {
+    id: "voice_left",
+    label: "VC退室",
+    description: "メンバーがボイスチャンネルから退室した時に送信します。",
+    icon: "radio",
+  },
+  {
+    id: "message_deleted",
+    label: "メッセージ取り消し",
+    description: "メッセージが削除された時に送信します。",
+    icon: "trash",
+  },
+  {
+    id: "message_edited",
+    label: "メッセージ編集",
+    description: "メッセージが編集された時に送信します。",
+    icon: "message",
+  },
+];
+
+const GUARD_LOGGING_DEFAULTS = Object.fromEntries(
+  GUARD_LOGGING_EVENTS.map((event) => [event.id, { enabled: true, channel_id: "" }]),
+);
 
 class ApiError extends Error {
   constructor(status, message, requestId) {
@@ -261,6 +373,8 @@ const state = {
     tts: false,
     features: false,
     guardVerification: false,
+    guardModeration: false,
+    guardLogging: false,
   },
   pendingPageId: null,
   pendingProductId: null,
@@ -275,13 +389,23 @@ const state = {
     source: "sample",
     status: normalizeGuardStatus(null),
     verificationSettings: [],
+    moderationSettings: [],
+    loggingSettings: [],
     verificationOptions: null,
     verificationOptionsError: null,
     verificationRecords: [],
     verificationSaving: false,
+    moderationSaving: false,
+    loggingSaving: false,
     verificationMessage: null,
     verificationError: null,
+    moderationMessage: null,
+    moderationError: null,
+    loggingMessage: null,
+    loggingError: null,
     savedVerificationForm: null,
+    savedModerationForm: null,
+    savedLoggingForm: null,
     pendingFeatureId: null,
     pendingGuildId: null,
     verificationForm: {
@@ -291,6 +415,14 @@ const state = {
       log_channel_id: "",
       role_id: "",
       duplicate_action: "notify",
+    },
+    moderationForm: {
+      guild_id: "",
+      features: {},
+    },
+    loggingForm: {
+      guild_id: "",
+      events: {},
     },
   },
   requestIds: {
@@ -383,6 +515,7 @@ async function boot() {
       loadGuardData({ silent: true, renderAfter: false }),
     ]);
     hydrateGuardVerificationForm();
+    hydrateGuardModerationForm();
     render();
     return;
   }
@@ -1007,6 +1140,7 @@ async function loadGuardAccountContext(options = {}) {
         ? state.selectedGuildId
         : (state.guilds.find((guild) => guild.bot_present && guild.can_manage)?.id ?? null);
     hydrateGuardVerificationForm();
+    hydrateGuardModerationForm();
   } catch (error) {
     if (requestId !== state.requestIds.account) {
       return;
@@ -1579,6 +1713,8 @@ function resetDirtyViews() {
     tts: false,
     features: false,
     guardVerification: false,
+    guardModeration: false,
+    guardLogging: false,
   };
   clearPendingNavigation();
 }
@@ -1683,11 +1819,43 @@ function guardVerificationFormFromSettings(guildId) {
   });
 }
 
+function guardModerationFormFromSettings(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  const settings = state.guard.moderationSettings.find((item) => item.guild_id === resolvedGuildId);
+  return normalizeGuardModerationForm({
+    guild_id: resolvedGuildId,
+    features: settings?.features ?? {},
+  });
+}
+
+function guardLoggingFormFromSettings(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  const settings = state.guard.loggingSettings.find((item) => item.guild_id === resolvedGuildId);
+  return normalizeGuardLoggingForm({
+    guild_id: resolvedGuildId,
+    events: settings?.events ?? {},
+  });
+}
+
 function rememberSavedGuardVerificationForm(form) {
   const normalized = normalizeGuardVerificationForm(form);
   state.guard.verificationForm = cloneState(normalized);
   state.guard.savedVerificationForm = cloneState(normalized);
   state.dirtyViews.guardVerification = false;
+}
+
+function rememberSavedGuardModerationForm(form) {
+  const normalized = normalizeGuardModerationForm(form);
+  state.guard.moderationForm = cloneState(normalized);
+  state.guard.savedModerationForm = cloneState(normalized);
+  state.dirtyViews.guardModeration = false;
+}
+
+function rememberSavedGuardLoggingForm(form) {
+  const normalized = normalizeGuardLoggingForm(form);
+  state.guard.loggingForm = cloneState(normalized);
+  state.guard.savedLoggingForm = cloneState(normalized);
+  state.dirtyViews.guardLogging = false;
 }
 
 function comparableGuardVerificationForm(form) {
@@ -1697,11 +1865,33 @@ function comparableGuardVerificationForm(form) {
   return normalizeGuardVerificationForm(form);
 }
 
+function comparableGuardModerationForm(form) {
+  if (!form) {
+    return null;
+  }
+  return normalizeGuardModerationForm(form);
+}
+
+function comparableGuardLoggingForm(form) {
+  if (!form) {
+    return null;
+  }
+  return normalizeGuardLoggingForm(form);
+}
+
 function updateDirtyState(view) {
   if (view === "guardVerification") {
     state.dirtyViews.guardVerification =
       JSON.stringify(comparableGuardVerificationForm(state.guard.verificationForm)) !==
       JSON.stringify(comparableGuardVerificationForm(state.guard.savedVerificationForm));
+  } else if (view === "guardModeration") {
+    state.dirtyViews.guardModeration =
+      JSON.stringify(comparableGuardModerationForm(state.guard.moderationForm)) !==
+      JSON.stringify(comparableGuardModerationForm(state.guard.savedModerationForm));
+  } else if (view === "guardLogging") {
+    state.dirtyViews.guardLogging =
+      JSON.stringify(comparableGuardLoggingForm(state.guard.loggingForm)) !==
+      JSON.stringify(comparableGuardLoggingForm(state.guard.savedLoggingForm));
   } else if (view === "features") {
     state.dirtyViews.features =
       JSON.stringify(comparableFeatureSettings(state.featureSettings)) !==
@@ -1720,10 +1910,21 @@ function isViewDirty(view) {
 
 function hasUnsavedChanges() {
   if (state.activeProduct === "guard") {
-    return isViewDirty("guardVerification");
+    return isViewDirty(activeGuardDirtyView());
   }
   const view = activeSettingsView();
   return (view === "tts" || view === "features") && isViewDirty(view);
+}
+
+function activeGuardDirtyView() {
+  const featureId = activeGuardFeature().id;
+  if (featureId === "moderation") {
+    return "guardModeration";
+  }
+  if (featureId === "logging") {
+    return "guardLogging";
+  }
+  return "guardVerification";
 }
 
 function syncDirtyControls() {
@@ -2421,10 +2622,12 @@ async function loadGuardData(options = {}) {
 
   if (state.guard.apiBase) {
     try {
-      const [healthResult, statusResult, settingsResult, optionsResult] = await Promise.allSettled([
+      const [healthResult, statusResult, settingsResult, moderationResult, loggingResult, optionsResult] = await Promise.allSettled([
         guardFetchJson(guardApiUrl("/health")),
         guardFetchJson(guardApiUrl("/status")),
         guardFetchJson(guardApiUrl("/verification/settings")),
+        guardFetchJson(guardApiUrl("/moderation/settings")),
+        guardFetchJson(guardApiUrl("/logging/settings")),
         guardFetchJson(guardApiUrl("/verification/options")),
       ]);
       if (healthResult.status !== "fulfilled") {
@@ -2441,6 +2644,10 @@ async function loadGuardData(options = {}) {
       state.guard.events = [];
       state.guard.verificationSettings =
         settingsResult.status === "fulfilled" ? normalizeGuardVerificationSettings(settingsResult.value?.settings) : [];
+      state.guard.moderationSettings =
+        moderationResult.status === "fulfilled" ? normalizeGuardModerationSettings(moderationResult.value?.settings) : [];
+      state.guard.loggingSettings =
+        loggingResult.status === "fulfilled" ? normalizeGuardLoggingSettings(loggingResult.value?.settings) : [];
       state.guard.verificationRecords = [];
       if (optionsResult.status === "fulfilled" && optionsResult.value) {
         state.guard.verificationOptions = normalizeGuardVerificationOptions(optionsResult.value);
@@ -2449,6 +2656,8 @@ async function loadGuardData(options = {}) {
         state.guard.verificationOptionsError = optionsResult.reason instanceof Error ? optionsResult.reason.message : String(optionsResult.reason);
       }
       hydrateGuardVerificationForm();
+      hydrateGuardModerationForm();
+      hydrateGuardLoggingForm();
       state.guard.source = "api";
       state.guard.loadedAt = new Date().toISOString();
       state.guard.loading = false;
@@ -2479,9 +2688,13 @@ async function loadGuardData(options = {}) {
     state.guard.source = "sample";
   }
   state.guard.verificationSettings = [];
+  state.guard.moderationSettings = [];
+  state.guard.loggingSettings = [];
   state.guard.verificationOptions = null;
   state.guard.verificationRecords = [];
   hydrateGuardVerificationForm();
+  hydrateGuardModerationForm();
+  hydrateGuardLoggingForm();
   state.guard.loading = false;
   if (options.renderAfter !== false) {
     render();
@@ -2632,6 +2845,108 @@ function normalizeGuardDuplicateAction(value) {
   return GUARD_DUPLICATE_ACTIONS.some((item) => item.id === action) ? action : "notify";
 }
 
+function normalizeGuardModerationLevel(value) {
+  const level = String(value ?? "medium").toLowerCase();
+  return GUARD_MODERATION_LEVELS.some((item) => item.id === level) ? level : "medium";
+}
+
+function normalizeGuardModerationAction(value, fallback = "delete") {
+  const action = String(value ?? fallback).toLowerCase();
+  return GUARD_MODERATION_ACTIONS.some((item) => item.id === action) ? action : fallback;
+}
+
+function normalizeGuardModerationChannelIds(value) {
+  const rawItems = Array.isArray(value) ? value : value ? [value] : [];
+  return rawItems
+    .map((item) => String(item ?? "").trim())
+    .filter((item, index, array) => item && /^\d+$/.test(item) && array.indexOf(item) === index);
+}
+
+function normalizeGuardModerationFeatureSettings(featureId, settings) {
+  const defaults = GUARD_MODERATION_DEFAULTS[featureId] ?? {
+    enabled: true,
+    level: "medium",
+    action: "delete",
+    log_channel_id: "",
+    target_channel_ids: [],
+    all_channels_enabled: true,
+  };
+  const rawAllChannelsEnabled = settings?.all_channels_enabled;
+  const allChannelsEnabled = rawAllChannelsEnabled == null
+    ? !Boolean(settings?.all_channels_disabled)
+    : Boolean(rawAllChannelsEnabled);
+  return {
+    enabled: settings?.enabled !== false,
+    level: normalizeGuardModerationLevel(settings?.level ?? defaults.level),
+    action: normalizeGuardModerationAction(settings?.action, defaults.action),
+    log_channel_id: String(settings?.log_channel_id ?? defaults.log_channel_id ?? ""),
+    target_channel_ids: normalizeGuardModerationChannelIds(settings?.target_channel_ids ?? settings?.disabled_channel_ids ?? defaults.target_channel_ids),
+    all_channels_enabled: allChannelsEnabled,
+  };
+}
+
+function normalizeGuardModerationForm(form) {
+  const rawFeatures = isObject(form?.features) ? form.features : {};
+  return {
+    guild_id: String(form?.guild_id ?? ""),
+    features: Object.fromEntries(
+      GUARD_MODERATION_FEATURES.map((feature) => [
+        feature.id,
+        normalizeGuardModerationFeatureSettings(feature.id, rawFeatures[feature.id]),
+      ]),
+    ),
+  };
+}
+
+function normalizeGuardModerationSettings(settings) {
+  if (!Array.isArray(settings)) {
+    return [];
+  }
+  return settings.map((item) => {
+    const normalized = normalizeGuardModerationForm(item);
+    return {
+      ...normalized,
+      updated_at: item?.updated_at ?? null,
+      updated_by: item?.updated_by ?? null,
+    };
+  }).filter((item) => item.guild_id);
+}
+
+function normalizeGuardLoggingEventSettings(eventId, settings) {
+  const defaults = GUARD_LOGGING_DEFAULTS[eventId] ?? { enabled: true, channel_id: "" };
+  return {
+    enabled: settings?.enabled !== false,
+    channel_id: String(settings?.channel_id ?? defaults.channel_id ?? ""),
+  };
+}
+
+function normalizeGuardLoggingForm(form) {
+  const rawEvents = isObject(form?.events) ? form.events : {};
+  return {
+    guild_id: String(form?.guild_id ?? ""),
+    events: Object.fromEntries(
+      GUARD_LOGGING_EVENTS.map((event) => [
+        event.id,
+        normalizeGuardLoggingEventSettings(event.id, rawEvents[event.id]),
+      ]),
+    ),
+  };
+}
+
+function normalizeGuardLoggingSettings(settings) {
+  if (!Array.isArray(settings)) {
+    return [];
+  }
+  return settings.map((item) => {
+    const normalized = normalizeGuardLoggingForm(item);
+    return {
+      ...normalized,
+      updated_at: item?.updated_at ?? null,
+      updated_by: item?.updated_by ?? null,
+    };
+  }).filter((item) => item.guild_id);
+}
+
 function hydrateGuardVerificationForm() {
   const form = state.guard.verificationForm;
   const guilds = guardConfigurableGuilds();
@@ -2652,8 +2967,64 @@ function hydrateGuardVerificationForm() {
   updateDirtyState("guardVerification");
 }
 
+function hydrateGuardModerationForm() {
+  const form = state.guard.moderationForm;
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  const fallbackGuildId = guilds[0]?.id ?? "";
+  const guildId = [
+    form.guild_id,
+    state.guard.moderationSettings[0]?.guild_id,
+    state.guard.verificationForm.guild_id,
+    state.guard.verificationOptions?.guilds?.[0]?.id,
+    state.guard.status.guilds?.[0]?.id,
+  ].find((id) => id && guildIds.has(id)) ?? fallbackGuildId;
+  const savedForm = guardModerationFormFromSettings(guildId);
+  const preserveDirtyForm = isViewDirty("guardModeration") && form.guild_id === guildId;
+  state.guard.savedModerationForm = cloneState(savedForm);
+  if (!preserveDirtyForm) {
+    state.guard.moderationForm = cloneState(savedForm);
+  }
+  updateDirtyState("guardModeration");
+}
+
+function hydrateGuardLoggingForm() {
+  const form = state.guard.loggingForm;
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  const fallbackGuildId = guilds[0]?.id ?? "";
+  const guildId = [
+    form.guild_id,
+    state.guard.loggingSettings[0]?.guild_id,
+    state.guard.verificationForm.guild_id,
+    state.guard.verificationOptions?.guilds?.[0]?.id,
+    state.guard.status.guilds?.[0]?.id,
+  ].find((id) => id && guildIds.has(id)) ?? fallbackGuildId;
+  const savedForm = guardLoggingFormFromSettings(guildId);
+  const preserveDirtyForm = isViewDirty("guardLogging") && form.guild_id === guildId;
+  state.guard.savedLoggingForm = cloneState(savedForm);
+  if (!preserveDirtyForm) {
+    state.guard.loggingForm = cloneState(savedForm);
+  }
+  updateDirtyState("guardLogging");
+}
+
 function applyGuardVerificationSettingsForGuild(guildId) {
   rememberSavedGuardVerificationForm(guardVerificationFormFromSettings(guildId));
+}
+
+function applyGuardModerationSettingsForGuild(guildId) {
+  rememberSavedGuardModerationForm(guardModerationFormFromSettings(guildId));
+}
+
+function applyGuardLoggingSettingsForGuild(guildId) {
+  rememberSavedGuardLoggingForm(guardLoggingFormFromSettings(guildId));
+}
+
+function applyGuardSettingsForGuild(guildId) {
+  applyGuardVerificationSettingsForGuild(guildId);
+  applyGuardModerationSettingsForGuild(guildId);
+  applyGuardLoggingSettingsForGuild(guildId);
 }
 
 function guardSourceText() {
@@ -2678,7 +3049,7 @@ function guardStatusClass() {
 
 function renderGuardDashboard() {
   const feature = activeGuardFeature();
-  const selectedGuild = guardVerificationSelectedGuild();
+  const selectedGuild = activeGuardSelectedGuild();
   const pageTitle = selectedGuild?.name ?? (guardConfigurableGuilds().length ? "サーバーを選択" : "設定可能なサーバーなし");
   return `
     <div class="dashboard-grid dashboard-grid--guard">
@@ -2706,6 +3077,12 @@ function activeGuardFeature() {
 function renderGuardFeatureContent(feature) {
   if (feature?.id === "verification") {
     return renderGuardVerification();
+  }
+  if (feature?.id === "moderation") {
+    return renderGuardModeration();
+  }
+  if (feature?.id === "logging") {
+    return renderGuardLogging();
   }
   return `
     <section class="settings-panel empty-state">
@@ -2746,7 +3123,7 @@ function renderGuardFunctionNavItem(feature) {
 function renderGuardGuildList() {
   const guilds = guardConfigurableGuilds();
   const installableGuilds = guardInstallableGuilds();
-  const selectedGuild = guardVerificationSelectedGuild();
+  const selectedGuild = activeGuardSelectedGuild();
   const guildListExpanded = !state.guildListCollapsed;
   return `
     <aside class="guild-list ${state.guildListCollapsed ? "guild-list--collapsed" : ""}" aria-label="Guardサーバー">
@@ -2784,7 +3161,7 @@ function renderGuardGuildList() {
 }
 
 function renderGuardSelectableGuild(guild) {
-  const active = state.guard.verificationForm.guild_id === guild.id;
+  const active = activeGuardSelectedGuild()?.id === guild.id;
   return `
     <button class="guild-row ${active ? "guild-row--selected" : ""}" type="button" data-guard-guild-id="${escapeAttribute(guild.id)}">
       ${renderGuardGuildIcon(guild)}
@@ -2817,7 +3194,7 @@ function renderGuardFeatureList() {
       </div>
       <div class="guard-feature-index__list">
         ${GUARD_FEATURES.map((feature) => `
-          <a class="guard-feature-index__item" href="#guard-verification-settings">
+          <a class="guard-feature-index__item" href="#guard-${escapeAttribute(feature.id)}-settings">
             <span class="guard-feature-index__icon">${icon(feature.icon)}</span>
             <span>
               <strong>${escapeHtml(feature.label)}</strong>
@@ -2858,7 +3235,7 @@ function renderGuardStatusRail() {
 }
 
 function renderGuardContent() {
-  return renderGuardVerification();
+  return renderGuardFeatureContent(activeGuardFeature());
 }
 
 function renderGuardOverview() {
@@ -3056,14 +3433,225 @@ function renderGuardVerification() {
           <input type="checkbox" data-guard-verification-field="enabled" ${form.enabled ? "checked" : ""} />
           <span>認証機能を有効にする</span>
         </label>
-        <div class="feature-card__actions guard-verification-actions">
-          <button class="icon-button icon-button--ghost" type="button" data-action="guard-load-verification-options" ${!state.guard.apiBase ? "disabled" : ""}>
-            ${icon("refresh")}<span>候補を取得</span>
+      </form>
+      ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネルとロール候補を読み込めませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
+    </section>
+  `;
+}
+
+function renderGuardModeration() {
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const selectedGuild = guardModerationSelectedGuild();
+  const dirty = isViewDirty("guardModeration");
+  return `
+    ${renderGuardApiNotice()}
+    <section class="settings-panel guard-verification-panel guard-moderation-panel" id="guard-moderation-settings">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("shield")}<h2>荒らし対策</h2></div>
+        <div class="settings-panel__header-actions">
+          <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "設定可能" : "未接続"}</span>
+          <button class="icon-button icon-button--primary save-button ${dirty ? "save-button--dirty" : ""}" type="button" data-action="save-guard-moderation-settings" data-save-view="guardModeration" ${state.guard.moderationSaving ? "disabled" : ""}>
+            ${icon("save")}<span>${state.guard.moderationSaving ? "保存中" : "変更を保存"}</span>
           </button>
         </div>
+      </div>
+      <div class="status-banner guard-privacy-note">
+        ${icon("shield")}<span>招待リンク連投、外部リンク、スパム、暴言、下ネタの検知レベル・処罰・処罰ログチャンネル・対象チャンネルを機能ごとに設定します。</span>
+      </div>
+      ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
+      ${state.guard.moderationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.moderationMessage)}</span></p>` : ""}
+      <form class="guard-moderation-form" data-guard-moderation-form>
+        <div class="field guard-selected-server">
+          <span>選択中のサーバー</span>
+          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
+        </div>
+        <div class="guard-moderation-grid">
+          ${GUARD_MODERATION_FEATURES.map((feature) => renderGuardModerationFeatureCard(feature, form.features[feature.id], selectedGuild)).join("")}
+        </div>
       </form>
-      ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネルとロール候補を取得できませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
+      ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネル候補を読み込めませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
     </section>
+  `;
+}
+
+function renderGuardModerationFeatureCard(feature, settings, guild) {
+  const normalized = normalizeGuardModerationFeatureSettings(feature.id, settings);
+  const statusText = !normalized.enabled
+    ? "無効"
+    : normalized.all_channels_enabled
+      ? "全チャンネル対象"
+      : normalized.target_channel_ids.length
+        ? `対象 ${normalized.target_channel_ids.length}`
+        : "対象なし";
+  const allChannelsLabel = feature.id === "other_links" || feature.id === "invite_spam"
+    ? "全チャンネルでURLを無効にする"
+    : "全チャンネルで禁止する";
+  return `
+    <article class="feature-card guard-moderation-card">
+      <div class="feature-card__header">
+        <div class="panel-heading">${icon(feature.id === "other_links" ? "link" : feature.id === "spam" ? "message" : "shield")}<h2>${escapeHtml(feature.label)}</h2></div>
+        <span class="feature-status ${normalized.enabled && (normalized.all_channels_enabled || normalized.target_channel_ids.length) ? "feature-status--on" : ""}">${escapeHtml(statusText)}</span>
+      </div>
+      <p class="guard-moderation-card__description">${escapeHtml(feature.description)}</p>
+      <div class="settings-grid guard-moderation-card__fields">
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="enabled" ${normalized.enabled ? "checked" : ""} />
+          <span>この検知を有効にする</span>
+        </label>
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="all_channels_enabled" ${normalized.all_channels_enabled ? "checked" : ""} />
+          <span>${escapeHtml(allChannelsLabel)}</span>
+        </label>
+        <label class="field">
+          <span>検知レベル</span>
+          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
+            ${GUARD_MODERATION_LEVELS.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>処罰内容</span>
+          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="action">
+            ${GUARD_MODERATION_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
+          </select>
+        </label>
+        ${renderGuardModerationChannelField(feature.id, normalized.log_channel_id, guild)}
+        ${renderGuardModerationTargetChannelsField(feature.id, normalized.target_channel_ids, guild)}
+      </div>
+    </article>
+  `;
+}
+
+function renderGuardModerationChannelField(featureId, selectedValue, guild) {
+  const channels = guild?.text_channels ?? [];
+  if (!channels.length) {
+    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "Guard APIに接続すると選択できます";
+    return `
+      <label class="field">
+        <span>処罰ログチャンネル</span>
+        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id" disabled>
+          <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
+        </select>
+      </label>
+    `;
+  }
+  return `
+    <label class="field">
+      <span>処罰ログチャンネル</span>
+      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id">
+        <option value="">未設定</option>
+        ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderGuardModerationTargetChannelsField(featureId, selectedValues, guild) {
+  const channels = guild?.text_channels ?? [];
+  const label = featureId === "other_links" || featureId === "invite_spam" ? "URL無効チャンネル" : "禁止チャンネル";
+  const selectedIds = new Set(normalizeGuardModerationChannelIds(selectedValues));
+  if (!channels.length) {
+    const optionText = selectedIds.size ? `保存済み: ${[...selectedIds].join(", ")}` : "Guard APIに接続すると選択できます";
+    return `
+      <label class="field guard-moderation-channel-field">
+        <span>${escapeHtml(label)}</span>
+        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple disabled>
+          <option value="">${escapeHtml(optionText)}</option>
+        </select>
+        <small>全チャンネル対象をオフにした時、ここで選んだチャンネルだけに適用します。</small>
+      </label>
+    `;
+  }
+  return `
+    <label class="field guard-moderation-channel-field">
+      <span>${escapeHtml(label)}</span>
+      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple size="${Math.min(Math.max(channels.length, 3), 6)}">
+        ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${selectedIds.has(channel.id) ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+      </select>
+      <small>全チャンネル対象をオフにした時、ここで選んだチャンネルだけに適用します。</small>
+    </label>
+  `;
+}
+
+function renderGuardLogging() {
+  const form = normalizeGuardLoggingForm(state.guard.loggingForm);
+  const selectedGuild = guardLoggingSelectedGuild();
+  const dirty = isViewDirty("guardLogging");
+  return `
+    ${renderGuardApiNotice()}
+    <section class="settings-panel guard-verification-panel guard-logging-panel" id="guard-logging-settings">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("activity")}<h2>ログ機能</h2></div>
+        <div class="settings-panel__header-actions">
+          <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "設定可能" : "未接続"}</span>
+          <button class="icon-button icon-button--primary save-button ${dirty ? "save-button--dirty" : ""}" type="button" data-action="save-guard-logging-settings" data-save-view="guardLogging" ${state.guard.loggingSaving ? "disabled" : ""}>
+            ${icon("save")}<span>${state.guard.loggingSaving ? "保存中" : "変更を保存"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="status-banner guard-privacy-note">
+        ${icon("activity")}<span>参加、脱退、ロール付与、VC入退室、メッセージ削除・編集のログ送信先をイベントごとに設定します。</span>
+      </div>
+      ${state.guard.loggingError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.loggingError)}</span></p>` : ""}
+      ${state.guard.loggingMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.loggingMessage)}</span></p>` : ""}
+      <form class="guard-moderation-form guard-logging-form" data-guard-logging-form>
+        <div class="field guard-selected-server">
+          <span>選択中のサーバー</span>
+          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
+        </div>
+        <div class="guard-moderation-grid guard-logging-grid">
+          ${GUARD_LOGGING_EVENTS.map((event) => renderGuardLoggingEventCard(event, form.events[event.id], selectedGuild)).join("")}
+        </div>
+      </form>
+      ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネル候補を読み込めませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
+    </section>
+  `;
+}
+
+function renderGuardLoggingEventCard(event, settings, guild) {
+  const normalized = normalizeGuardLoggingEventSettings(event.id, settings);
+  const configured = Boolean(normalized.enabled && normalized.channel_id);
+  const statusText = configured ? "有効" : normalized.enabled ? "未設定" : "無効";
+  return `
+    <article class="feature-card guard-moderation-card guard-logging-card">
+      <div class="feature-card__header">
+        <div class="panel-heading">${icon(event.icon)}<h2>${escapeHtml(event.label)}</h2></div>
+        <span class="feature-status ${configured ? "feature-status--on" : ""}">${statusText}</span>
+      </div>
+      <p class="guard-moderation-card__description">${escapeHtml(event.description)}</p>
+      <div class="settings-grid guard-moderation-card__fields guard-logging-card__fields">
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-logging-event="${escapeAttribute(event.id)}" data-guard-logging-field="enabled" ${normalized.enabled ? "checked" : ""} />
+          <span>このログを有効にする</span>
+        </label>
+        ${renderGuardLoggingChannelField(event.id, normalized.channel_id, guild)}
+      </div>
+    </article>
+  `;
+}
+
+function renderGuardLoggingChannelField(eventId, selectedValue, guild) {
+  const channels = guild?.text_channels ?? [];
+  if (!channels.length) {
+    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "Guard APIに接続すると選択できます";
+    return `
+      <label class="field">
+        <span>ログ送信先チャンネル</span>
+        <select data-guard-logging-event="${escapeAttribute(eventId)}" data-guard-logging-field="channel_id" disabled>
+          <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
+        </select>
+      </label>
+    `;
+  }
+  return `
+    <label class="field">
+      <span>ログ送信先チャンネル</span>
+      <select data-guard-logging-event="${escapeAttribute(eventId)}" data-guard-logging-field="channel_id">
+        <option value="">未設定</option>
+        ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
+      </select>
+    </label>
   `;
 }
 
@@ -3089,7 +3677,7 @@ function renderGuardVerificationGuildField(guilds, selectedGuildId) {
 function renderGuardVerificationChannelField(field, label, selectedValue, guild) {
   const channels = guild?.text_channels ?? [];
   if (!channels.length) {
-    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "候補を取得すると選択できます";
+    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "Guard APIに接続すると選択できます";
     return `
       <label class="field">
         <span>${escapeHtml(label)}</span>
@@ -3113,7 +3701,7 @@ function renderGuardVerificationChannelField(field, label, selectedValue, guild)
 function renderGuardVerificationRoleField(selectedValue, guild) {
   const roles = guild?.roles ?? [];
   if (!roles.length) {
-    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "候補を取得すると選択できます";
+    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "Guard APIに接続すると選択できます";
     return `
       <label class="field">
         <span>認証後に付与するロール</span>
@@ -3155,7 +3743,7 @@ function renderGuardVerificationServerSettings(guilds) {
   });
   return `
     <div class="guard-server-list guard-verification-server-list">
-      ${rows.length ? rows.join("") : renderGuardVerificationEmpty("候補を取得すると、サーバーごとに認証設定を編集できます。")}
+      ${rows.length ? rows.join("") : renderGuardVerificationEmpty("Guard APIに接続すると、サーバーごとに認証設定を編集できます。")}
     </div>
   `;
 }
@@ -3231,6 +3819,25 @@ function guardVerificationSelectedGuild() {
   return guardConfigurableGuilds().find((guild) => guild.id === state.guard.verificationForm.guild_id) ?? null;
 }
 
+function guardModerationSelectedGuild() {
+  return guardConfigurableGuilds().find((guild) => guild.id === state.guard.moderationForm.guild_id) ?? null;
+}
+
+function guardLoggingSelectedGuild() {
+  return guardConfigurableGuilds().find((guild) => guild.id === state.guard.loggingForm.guild_id) ?? null;
+}
+
+function activeGuardSelectedGuild() {
+  const featureId = activeGuardFeature().id;
+  if (featureId === "moderation") {
+    return guardModerationSelectedGuild();
+  }
+  if (featureId === "logging") {
+    return guardLoggingSelectedGuild();
+  }
+  return guardVerificationSelectedGuild();
+}
+
 function guardConfigurableGuilds() {
   const guardGuildsById = new Map(guardLiveGuilds().map((guild) => [guild.id, guild]));
   if (state.guilds.length === 0) {
@@ -3286,7 +3893,7 @@ function buildGuardBotInviteUrl(guildId) {
 }
 
 function renderGuardSettings() {
-  return renderGuardVerification();
+  return renderGuardFeatureContent(activeGuardFeature());
 }
 
 function saveGuardApiBase() {
@@ -3295,7 +3902,11 @@ function saveGuardApiBase() {
   const validationMessage = validateGuardApiBase(rawValue);
   if (validationMessage) {
     state.guard.verificationError = validationMessage;
+    state.guard.moderationError = validationMessage;
+    state.guard.loggingError = validationMessage;
     state.guard.verificationMessage = null;
+    state.guard.moderationMessage = null;
+    state.guard.loggingMessage = null;
     render();
     return;
   }
@@ -3303,9 +3914,13 @@ function saveGuardApiBase() {
   state.guard.apiBase = value ?? "";
   state.guard.apiError = null;
   state.guard.verificationError = null;
+  state.guard.moderationError = null;
+  state.guard.loggingError = null;
   state.guard.verificationMessage = value
     ? "Guard API URLを保存しました。"
     : "Guard API URLをクリアしました。";
+  state.guard.moderationMessage = state.guard.verificationMessage;
+  state.guard.loggingMessage = state.guard.verificationMessage;
   try {
     if (value) {
       localStorage.setItem(GUARD_API_BASE_STORAGE_KEY, value);
@@ -3322,7 +3937,11 @@ function clearGuardApiBase() {
   state.guard.apiBase = "";
   state.guard.apiError = null;
   state.guard.verificationError = null;
+  state.guard.moderationError = null;
+  state.guard.loggingError = null;
   state.guard.verificationMessage = "Guard API URLをクリアしました。";
+  state.guard.moderationMessage = "Guard API URLをクリアしました。";
+  state.guard.loggingMessage = "Guard API URLをクリアしました。";
   try {
     localStorage.removeItem(GUARD_API_BASE_STORAGE_KEY);
   } catch {
@@ -3360,15 +3979,6 @@ function updateGuardVerificationField(target, options = { renderAfter: true }) {
   if (options.renderAfter) {
     render();
   }
-}
-
-function refreshGuardVerificationOwnerControls() {
-  const disabled = !state.guard.apiBase;
-  root.querySelectorAll('[data-action="guard-load-verification-options"]').forEach((button) => {
-    if (button instanceof HTMLButtonElement) {
-      button.disabled = disabled;
-    }
-  });
 }
 
 async function saveGuardVerificationSettings() {
@@ -3421,28 +4031,145 @@ async function saveGuardVerificationSettings() {
   return saved;
 }
 
-async function loadGuardVerificationOptions() {
-  if (!state.guard.apiBase) {
-    state.guard.verificationError = "Guard APIに接続できません。";
-    render();
+function updateGuardModerationField(target, options = { renderAfter: true }) {
+  const featureId = target.dataset.guardModerationFeature;
+  const field = target.dataset.guardModerationField;
+  if (!featureId || !field || !GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
     return;
   }
-  state.guard.verificationError = null;
-  state.guard.verificationOptionsError = null;
-  try {
-    const payload = await guardFetchJson(guardApiUrl("/verification/options"));
-    state.guard.verificationOptions = normalizeGuardVerificationOptions(payload);
-    hydrateGuardVerificationForm();
-    state.guard.verificationMessage = "チャンネルとロール候補を取得しました。";
-  } catch (error) {
-    state.guard.verificationOptionsError = error instanceof Error ? error.message : String(error);
+  const value = target instanceof HTMLInputElement && target.type === "checkbox"
+    ? target.checked
+    : target instanceof HTMLSelectElement && target.multiple
+      ? Array.from(target.selectedOptions).map((option) => option.value)
+      : target.value;
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+    ...form.features[featureId],
+    [field]: field === "level"
+      ? normalizeGuardModerationLevel(value)
+      : field === "action"
+        ? normalizeGuardModerationAction(value, GUARD_MODERATION_DEFAULTS[featureId]?.action)
+        : field === "target_channel_ids"
+          ? normalizeGuardModerationChannelIds(value)
+        : value,
+  });
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  if (options.renderAfter) {
+    render();
   }
+}
+
+async function saveGuardModerationSettings() {
+  if (!state.guard.apiBase) {
+    state.guard.moderationError = "Guard APIに接続できません。";
+    render();
+    return false;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  if (!form.guild_id) {
+    state.guard.moderationError = "サーバーを選択してください。";
+    render();
+    return false;
+  }
+
+  state.guard.moderationSaving = true;
+  state.guard.moderationError = null;
+  state.guard.moderationMessage = null;
   render();
+
+  let saved = false;
+  try {
+    const payload = await guardFetchJson(guardApiUrl("/moderation/settings"), {
+      method: "POST",
+      body: JSON.stringify({ settings: form }),
+    });
+    const nextSettings = normalizeGuardModerationSettings([payload?.settings]);
+    state.guard.moderationSettings = [
+      ...state.guard.moderationSettings.filter((item) => item.guild_id !== form.guild_id),
+      ...nextSettings,
+    ];
+    rememberSavedGuardModerationForm(nextSettings[0] ?? form);
+    clearPendingNavigation();
+    state.guard.moderationMessage = "荒らし対策の設定を保存しました。";
+    saved = true;
+    await loadGuardData({ silent: true, renderAfter: false });
+  } catch (error) {
+    state.guard.moderationError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.guard.moderationSaving = false;
+    render();
+  }
+  return saved;
+}
+
+function updateGuardLoggingField(target, options = { renderAfter: true }) {
+  const eventId = target.dataset.guardLoggingEvent;
+  const field = target.dataset.guardLoggingField;
+  if (!eventId || !field || !GUARD_LOGGING_EVENTS.some((event) => event.id === eventId)) {
+    return;
+  }
+  const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
+  const form = normalizeGuardLoggingForm(state.guard.loggingForm);
+  form.events[eventId] = normalizeGuardLoggingEventSettings(eventId, {
+    ...form.events[eventId],
+    [field]: value,
+  });
+  state.guard.loggingForm = form;
+  state.guard.loggingError = null;
+  updateDirtyState("guardLogging");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+async function saveGuardLoggingSettings() {
+  if (!state.guard.apiBase) {
+    state.guard.loggingError = "Guard APIに接続できません。";
+    render();
+    return false;
+  }
+  const form = normalizeGuardLoggingForm(state.guard.loggingForm);
+  if (!form.guild_id) {
+    state.guard.loggingError = "サーバーを選択してください。";
+    render();
+    return false;
+  }
+
+  state.guard.loggingSaving = true;
+  state.guard.loggingError = null;
+  state.guard.loggingMessage = null;
+  render();
+
+  let saved = false;
+  try {
+    const payload = await guardFetchJson(guardApiUrl("/logging/settings"), {
+      method: "POST",
+      body: JSON.stringify({ settings: form }),
+    });
+    const nextSettings = normalizeGuardLoggingSettings([payload?.settings]);
+    state.guard.loggingSettings = [
+      ...state.guard.loggingSettings.filter((item) => item.guild_id !== form.guild_id),
+      ...nextSettings,
+    ];
+    rememberSavedGuardLoggingForm(nextSettings[0] ?? form);
+    clearPendingNavigation();
+    state.guard.loggingMessage = "ログ機能の設定を保存しました。";
+    saved = true;
+    await loadGuardData({ silent: true, renderAfter: false });
+  } catch (error) {
+    state.guard.loggingError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.guard.loggingSaving = false;
+    render();
+  }
+  return saved;
 }
 
 function guardEventLevel(value) {
   const raw = String(value ?? "").toLowerCase();
-  if (raw.includes("warning") || raw.includes("suspicious") || raw.includes("mention") || raw.includes("url")) {
+  if (raw.includes("warning") || raw.includes("suspicious") || raw.includes("moderation") || raw.includes("mention") || raw.includes("url")) {
     return "warning";
   }
   if (raw.includes("ready") || raw.includes("joined") || raw.includes("success")) {
@@ -4801,7 +5528,7 @@ function renderUnsavedChangesPrompt() {
   if (!hasPendingNavigation() || !hasUnsavedChanges()) {
     return "";
   }
-  const saving = state.saving || state.guard.verificationSaving;
+  const saving = state.saving || state.guard.verificationSaving || state.guard.moderationSaving || state.guard.loggingSaving;
   return `
     <div class="unsaved-bar" role="alert" aria-live="assertive">
       <div class="unsaved-bar__message">
@@ -4873,7 +5600,7 @@ async function completePendingNavigation(pending) {
     return;
   }
   if (pending.type === "guard-guild") {
-    applyGuardVerificationSettingsForGuild(pending.guildId);
+    applyGuardSettingsForGuild(pending.guildId);
     state.guildListCollapsed = true;
     render();
   }
@@ -4923,7 +5650,8 @@ function requestGuardFeatureChange(featureId) {
 }
 
 function requestGuardGuildChange(guildId) {
-  if (!guildId || guildId === state.guard.verificationForm.guild_id) {
+  const currentGuildId = activeGuardSelectedGuild()?.id ?? "";
+  if (!guildId || guildId === currentGuildId) {
     clearPendingNavigation();
     render();
     return;
@@ -4934,7 +5662,7 @@ function requestGuardGuildChange(guildId) {
     render();
     return;
   }
-  applyGuardVerificationSettingsForGuild(guildId);
+  applyGuardSettingsForGuild(guildId);
   state.guildListCollapsed = true;
   clearPendingNavigation();
   render();
@@ -4963,6 +5691,13 @@ function loadActivePageData() {
 
 async function saveActiveSettings() {
   if (state.activeProduct === "guard") {
+    const featureId = activeGuardFeature().id;
+    if (featureId === "moderation") {
+      return saveGuardModerationSettings();
+    }
+    if (featureId === "logging") {
+      return saveGuardLoggingSettings();
+    }
     return saveGuardVerificationSettings();
   }
   if (activeSettingsView() === "host" || activeSettingsView() === "user") {
@@ -4981,8 +5716,16 @@ async function savePendingSettings() {
 
 function discardActiveSettings() {
   if (state.activeProduct === "guard") {
-    state.guard.verificationForm = cloneState(state.guard.savedVerificationForm) ?? normalizeGuardVerificationForm(null);
-    state.dirtyViews.guardVerification = false;
+    if (activeGuardFeature().id === "moderation") {
+      state.guard.moderationForm = cloneState(state.guard.savedModerationForm) ?? normalizeGuardModerationForm(null);
+      state.dirtyViews.guardModeration = false;
+    } else if (activeGuardFeature().id === "logging") {
+      state.guard.loggingForm = cloneState(state.guard.savedLoggingForm) ?? normalizeGuardLoggingForm(null);
+      state.dirtyViews.guardLogging = false;
+    } else {
+      state.guard.verificationForm = cloneState(state.guard.savedVerificationForm) ?? normalizeGuardVerificationForm(null);
+      state.dirtyViews.guardVerification = false;
+    }
     return;
   }
   if (activeSettingsView() === "features") {
@@ -5008,6 +5751,12 @@ function handleSubmit(event) {
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-verification-form]")) {
     event.preventDefault();
     void saveGuardVerificationSettings();
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-moderation-form]")) {
+    event.preventDefault();
+    void saveGuardModerationSettings();
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-logging-form]")) {
+    event.preventDefault();
+    void saveGuardLoggingSettings();
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-api-form]")) {
     event.preventDefault();
     saveGuardApiBase();
@@ -5079,8 +5828,6 @@ function handleClick(event) {
       void activateProduct(actionEl.dataset.product);
     } else if (action === "guard-clear-api") {
       clearGuardApiBase();
-    } else if (action === "guard-load-verification-options") {
-      void loadGuardVerificationOptions();
     } else if (action === "guard-edit-verification-guild") {
       const guildId = actionEl.dataset.guardGuildId;
       if (guildId) {
@@ -5088,6 +5835,10 @@ function handleClick(event) {
       }
     } else if (action === "save-guard-verification-settings") {
       void saveGuardVerificationSettings();
+    } else if (action === "save-guard-moderation-settings") {
+      void saveGuardModerationSettings();
+    } else if (action === "save-guard-logging-settings") {
+      void saveGuardLoggingSettings();
     } else if (action === "login") {
       if (currentLoginBlocked()) {
         state.security.error =
@@ -5254,6 +6005,10 @@ function handleChange(event) {
 
   if (target.dataset.guardVerificationField) {
     updateGuardVerificationField(target, { renderAfter: true });
+  } else if (target.dataset.guardModerationField) {
+    updateGuardModerationField(target, { renderAfter: true });
+  } else if (target.dataset.guardLoggingField) {
+    updateGuardLoggingField(target, { renderAfter: true });
   } else if (target.dataset.settingsField) {
     updateSettingsField(target);
   } else if (target.dataset.autoRuleField) {
@@ -5288,6 +6043,16 @@ function handleInput(event) {
 
   if (target.dataset.guardVerificationField) {
     updateGuardVerificationField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.guardModerationField) {
+    updateGuardModerationField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.guardLoggingField) {
+    updateGuardLoggingField(target, { renderAfter: false });
     return;
   }
 
