@@ -413,6 +413,7 @@ const state = {
     verificationForm: {
       guild_id: "",
       enabled: true,
+      button_channel_lock_enabled: true,
       button_channel_id: "",
       log_channel_id: "",
       role_id: "",
@@ -1801,6 +1802,7 @@ function normalizeGuardVerificationForm(form) {
   return {
     guild_id: String(form?.guild_id ?? ""),
     enabled: form?.enabled !== false,
+    button_channel_lock_enabled: form?.button_channel_lock_enabled !== false,
     button_channel_id: String(form?.button_channel_id ?? ""),
     log_channel_id: String(form?.log_channel_id ?? ""),
     role_id: String(form?.role_id ?? ""),
@@ -1814,6 +1816,7 @@ function guardVerificationFormFromSettings(guildId) {
   return normalizeGuardVerificationForm({
     guild_id: resolvedGuildId,
     enabled: settings?.enabled ?? true,
+    button_channel_lock_enabled: settings?.button_channel_lock_enabled ?? true,
     button_channel_id: settings?.button_channel_id ?? "",
     log_channel_id: settings?.log_channel_id ?? "",
     role_id: settings?.role_id ?? "",
@@ -2783,6 +2786,7 @@ function normalizeGuardVerificationSettings(settings) {
   return settings.map((item) => ({
     guild_id: String(item?.guild_id ?? ""),
     enabled: item?.enabled !== false,
+    button_channel_lock_enabled: item?.button_channel_lock_enabled !== false,
     button_channel_id: String(item?.button_channel_id ?? ""),
     log_channel_id: String(item?.log_channel_id ?? ""),
     role_id: String(item?.role_id ?? ""),
@@ -3432,6 +3436,10 @@ function renderGuardVerification() {
           </select>
         </label>
         <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-verification-field="button_channel_lock_enabled" ${form.button_channel_lock_enabled ? "checked" : ""} />
+          <span>認証ボタン配置チャンネルを管理者以外送信不可にする</span>
+        </label>
+        <label class="toggle-row guard-verification-toggle">
           <input type="checkbox" data-guard-verification-field="enabled" ${form.enabled ? "checked" : ""} />
           <span>認証機能を有効にする</span>
         </label>
@@ -3518,7 +3526,7 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
           </select>
         </label>
         ${renderGuardModerationChannelField(feature.id, normalized.log_channel_id, guild)}
-        ${renderGuardModerationTargetChannelsField(feature.id, normalized.target_channel_ids, guild)}
+        ${renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.target_channel_ids, guild)}
       </div>
     </article>
   `;
@@ -3571,6 +3579,53 @@ function renderGuardModerationTargetChannelsField(featureId, selectedValues, gui
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${selectedIds.has(channel.id) ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
       </select>
       <small>全チャンネル対象をオフにした時、ここで選んだチャンネルだけに適用します。</small>
+    </label>
+  `;
+}
+
+function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedValues, guild) {
+  const channels = guild?.text_channels ?? [];
+  const label = featureId === "other_links" || featureId === "invite_spam" ? "URL無効チャンネル" : "禁止チャンネル";
+  const selectedIds = new Set(normalizeGuardModerationChannelIds(selectedValues));
+  if (!channels.length) {
+    const optionText = selectedIds.size ? `保存済み: ${[...selectedIds].join(", ")}` : "Guard APIに接続すると選択できます";
+    return `
+      <label class="field guard-moderation-channel-field">
+        <span>${escapeHtml(label)}</span>
+        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" disabled>
+          <option value="">${escapeHtml(optionText)}</option>
+        </select>
+        <small>全チャンネル対象をオフにすると、追加済みのチャンネルだけに適用します。</small>
+      </label>
+    `;
+  }
+
+  const availableChannels = channels.filter((channel) => !selectedIds.has(String(channel.id)));
+  const selectedRows = [...selectedIds].map((channelId) => {
+    const channel = channels.find((item) => String(item.id) === channelId);
+    return {
+      id: channelId,
+      label: channel ? `#${channel.name}` : channelId,
+    };
+  });
+
+  return `
+    <label class="field guard-moderation-channel-field">
+      <span>${escapeHtml(label)}</span>
+      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" ${availableChannels.length ? "" : "disabled"}>
+        <option value="">${availableChannels.length ? "追加するチャンネルを選択" : "追加できるチャンネルはありません"}</option>
+        ${availableChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}">#${escapeHtml(channel.name)}</option>`).join("")}
+      </select>
+      <div class="guard-moderation-channel-list" role="list">
+        ${selectedRows.length
+          ? selectedRows.map((channel) => `
+            <button class="guard-moderation-channel-chip" type="button" data-action="remove-guard-moderation-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-channel-id="${escapeAttribute(channel.id)}" title="対象から外す">
+              <span>${escapeHtml(channel.label)}</span>${icon("trash")}
+            </button>
+          `).join("")
+          : `<span class="guard-moderation-channel-empty">まだ追加されていません</span>`}
+      </div>
+      <small>全チャンネル対象をオフにすると、追加済みのチャンネルだけに適用します。チャンネルは選ぶたびに追加されます。</small>
     </label>
   `;
 }
@@ -4039,14 +4094,37 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   if (!featureId || !field || !GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
     return;
   }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  if (field === "target_channel_ids_add") {
+    const channelId = String(target.value ?? "").trim();
+    if (!channelId) {
+      return;
+    }
+    form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+      ...currentFeature,
+      all_channels_enabled: false,
+      target_channel_ids: normalizeGuardModerationChannelIds([
+        ...currentFeature.target_channel_ids,
+        channelId,
+      ]),
+    });
+    target.value = "";
+    state.guard.moderationForm = form;
+    state.guard.moderationError = null;
+    updateDirtyState("guardModeration");
+    if (options.renderAfter) {
+      render();
+    }
+    return;
+  }
   const value = target instanceof HTMLInputElement && target.type === "checkbox"
     ? target.checked
     : target instanceof HTMLSelectElement && target.multiple
       ? Array.from(target.selectedOptions).map((option) => option.value)
       : target.value;
-  const form = normalizeGuardModerationForm(state.guard.moderationForm);
   form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
-    ...form.features[featureId],
+    ...currentFeature,
     [field]: field === "level"
       ? normalizeGuardModerationLevel(value)
       : field === "action"
@@ -4054,6 +4132,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
         : field === "target_channel_ids"
           ? normalizeGuardModerationChannelIds(value)
         : value,
+    ...(field === "target_channel_ids" ? { all_channels_enabled: false } : {}),
   });
   state.guard.moderationForm = form;
   state.guard.moderationError = null;
@@ -4061,6 +4140,26 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   if (options.renderAfter) {
     render();
   }
+}
+
+function removeGuardModerationTargetChannel(featureId, channelId) {
+  if (!GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
+    return;
+  }
+  const normalizedChannelId = String(channelId ?? "").trim();
+  if (!normalizedChannelId) {
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+    ...currentFeature,
+    target_channel_ids: currentFeature.target_channel_ids.filter((item) => item !== normalizedChannelId),
+  });
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
 }
 
 async function saveGuardModerationSettings() {
@@ -5839,6 +5938,8 @@ function handleClick(event) {
       void saveGuardVerificationSettings();
     } else if (action === "save-guard-moderation-settings") {
       void saveGuardModerationSettings();
+    } else if (action === "remove-guard-moderation-channel") {
+      removeGuardModerationTargetChannel(actionEl.dataset.guardModerationFeature, actionEl.dataset.channelId);
     } else if (action === "save-guard-logging-settings") {
       void saveGuardLoggingSettings();
     } else if (action === "login") {

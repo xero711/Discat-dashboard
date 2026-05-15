@@ -3266,6 +3266,57 @@ input[type="checkbox"]:checked::before {
   line-height: 1.55;
 }
 
+.guard-moderation-channel-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.guard-moderation-channel-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.guard-moderation-channel-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guard-moderation-channel-chip svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.guard-moderation-channel-chip:hover {
+  border-color: rgba(255, 105, 135, 0.48);
+  background: rgba(255, 105, 135, 0.13);
+}
+
+.guard-moderation-channel-empty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  color: var(--muted-2);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 .guard-moderation-channel-field small {
   color: var(--muted-2);
   font-size: 0.72rem;
