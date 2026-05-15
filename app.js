@@ -1410,7 +1410,7 @@ async function sendSupportInquiry() {
     return;
   }
   if (!guild) {
-    state.support.error = `${supportProductLabel(product)} BOTが入っていて、あなたが管理権限を持つサーバーを選択してください。`;
+    state.support.error = `${supportProductLabel(product)} BOTが入っていて、あなたが管理権限を持つサーバーが見つかりません。`;
     state.support.success = null;
     render();
     return;
@@ -2400,9 +2400,22 @@ function supportEligibleGuilds(product = state.support.product) {
   return [];
 }
 
+function preferredSupportGuild(product, guilds = supportEligibleGuilds(product)) {
+  const normalizedProduct = normalizeSupportProduct(product);
+  if (!normalizedProduct) {
+    return null;
+  }
+  const preferredGuildId =
+    normalizedProduct === "guard"
+      ? activeGuardSelectedGuild()?.id
+      : state.selectedGuildId;
+  return guilds.find((guild) => guild.id === preferredGuildId) ?? guilds[0] ?? null;
+}
+
 function supportSelectedGuild() {
   const product = normalizeSupportProduct(state.support.product);
-  return supportEligibleGuilds(product).find((guild) => guild.id === state.support.guildId) ?? null;
+  const guilds = supportEligibleGuilds(product);
+  return guilds.find((guild) => guild.id === state.support.guildId) ?? preferredSupportGuild(product, guilds);
 }
 
 function supportRequiresOther() {
@@ -2417,7 +2430,7 @@ function syncSupportGuildSelection() {
   }
   const guilds = supportEligibleGuilds(product);
   if (!guilds.some((guild) => guild.id === state.support.guildId)) {
-    state.support.guildId = guilds[0]?.id ?? "";
+    state.support.guildId = preferredSupportGuild(product, guilds)?.id ?? "";
   }
 }
 
@@ -4803,10 +4816,9 @@ function renderSupportInquiryDialog() {
   const support = state.support;
   const product = normalizeSupportProduct(support.product);
   const requirement = normalizeSupportRequirement(support.requirement);
-  const eligibleGuilds = supportEligibleGuilds(product);
   const selectedGuild = supportSelectedGuild();
-  const guildDisabled = !product || support.sending || (product === "guard" && state.guard.loading) || !eligibleGuilds.length;
-  const canSubmit = Boolean(product && support.guildId && requirement);
+  const otherReady = requirement !== "other" || Boolean(support.requirementOther.trim());
+  const canSubmit = Boolean(product && selectedGuild && requirement && otherReady);
   const progress = supportProgress();
   return `
     <div class="support-dialog-backdrop" data-support-backdrop>
@@ -4837,21 +4849,11 @@ function renderSupportInquiryDialog() {
                 checked: product === item.id,
                 disabled: support.sending,
               })).join("")}
-            </div>`,
-          )}
-          ${renderSupportQuestion(
-            "02",
-            "対象サーバー",
-            `<label class="field support-survey__select">
-              <select data-support-field="guild_id" required ${guildDisabled ? "disabled" : ""}>
-                <option value="">${escapeHtml(supportGuildPlaceholder(product, eligibleGuilds))}</option>
-                ${eligibleGuilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${support.guildId === guild.id ? "selected" : ""}>${escapeHtml(guild.name)} (${escapeHtml(guild.id)})</option>`).join("")}
-              </select>
-            </label>
+            </div>
             ${renderSupportServerSummary(product, selectedGuild)}`,
           )}
           ${renderSupportQuestion(
-            "03",
+            "02",
             "要件",
             `<div class="support-choice-grid">
               ${SUPPORT_REQUIREMENTS.map((item) => renderSupportChoice({
@@ -4868,7 +4870,7 @@ function renderSupportInquiryDialog() {
             </label>`,
           )}
           ${renderSupportQuestion(
-            "04",
+            "03",
             "メッセージ",
             `<label class="field support-message-field">
               <textarea maxlength="${SUPPORT_MESSAGE_MAX_LENGTH}" rows="7" data-support-field="message" required placeholder="困っている内容、再現手順、希望する対応など" ${support.sending ? "disabled" : ""}>${escapeHtml(support.message)}</textarea>
@@ -4926,11 +4928,9 @@ function renderSupportChoice({ field, value, label, checked, disabled }) {
 function supportProgress() {
   const product = normalizeSupportProduct(state.support.product);
   const requirement = normalizeSupportRequirement(state.support.requirement);
-  const guild = supportSelectedGuild();
   const otherReady = requirement !== "other" || Boolean(state.support.requirementOther.trim());
   const steps = [
     Boolean(product),
-    Boolean(guild),
     Boolean(requirement && otherReady),
     Boolean(state.support.message.trim()),
   ];
