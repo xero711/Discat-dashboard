@@ -1521,46 +1521,6 @@ body.body--guard.body--status-only .app-shell--guard {
   overflow-wrap: anywhere;
 }
 
-.support-server-summary {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  border: 1px solid rgba(117, 245, 186, 0.24);
-  border-radius: 8px;
-  padding: 12px;
-  background:
-    linear-gradient(135deg, rgba(117, 245, 186, 0.1), rgba(111, 232, 255, 0.06)),
-    rgba(17, 9, 30, 0.24);
-}
-
-.support-server-summary .guild-row__icon {
-  width: 48px;
-  height: 48px;
-}
-
-.support-server-summary strong,
-.support-server-summary small {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.support-server-summary strong {
-  color: var(--text-strong);
-  font-size: 0.98rem;
-  font-weight: 850;
-}
-
-.support-server-summary small {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 680;
-}
-
 .support-form__footer {
   display: flex;
   flex-wrap: wrap;

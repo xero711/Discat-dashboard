@@ -4816,9 +4816,8 @@ function renderSupportInquiryDialog() {
   const support = state.support;
   const product = normalizeSupportProduct(support.product);
   const requirement = normalizeSupportRequirement(support.requirement);
-  const selectedGuild = supportSelectedGuild();
   const otherReady = requirement !== "other" || Boolean(support.requirementOther.trim());
-  const canSubmit = Boolean(product && selectedGuild && requirement && otherReady);
+  const canSubmit = Boolean(product && requirement && otherReady);
   const progress = supportProgress();
   return `
     <div class="support-dialog-backdrop" data-support-backdrop>
@@ -4849,8 +4848,7 @@ function renderSupportInquiryDialog() {
                 checked: product === item.id,
                 disabled: support.sending,
               })).join("")}
-            </div>
-            ${renderSupportServerSummary(product, selectedGuild)}`,
+            </div>`,
           )}
           ${renderSupportQuestion(
             "02",
@@ -4946,40 +4944,6 @@ function supportProgress() {
     total: steps.length,
     percent: String(Math.round((done / steps.length) * 100)),
   };
-}
-
-function renderSupportServerSummary(product, guild) {
-  if (!product) {
-    return `<div class="empty-state">問い合わせ先として Discat Guard か Discat One を選択してください。</div>`;
-  }
-  if (product === "guard" && state.guard.loading) {
-    return `<div class="empty-state">Guard BOTが入っているサーバー情報を確認しています。</div>`;
-  }
-  if (!guild) {
-    return `<div class="empty-state">${escapeHtml(supportGuildPlaceholder(product, supportEligibleGuilds(product)))}</div>`;
-  }
-  return `
-    <div class="support-server-summary">
-      ${renderGuildIcon(guild)}
-      <span>
-        <strong>${escapeHtml(guild.name)}</strong>
-        <small>${escapeHtml(supportProductLabel(product))} BOT参加済み / 管理権限あり / ID ${escapeHtml(guild.id)}</small>
-      </span>
-    </div>
-  `;
-}
-
-function supportGuildPlaceholder(product, eligibleGuilds) {
-  if (!product) {
-    return "先に問い合わせ先を選択してください";
-  }
-  if (product === "guard" && state.guard.loading) {
-    return "Guardサーバー情報を確認中です";
-  }
-  if (!eligibleGuilds.length) {
-    return `${supportProductLabel(product)} BOTが入っていて管理権限があるサーバーがありません`;
-  }
-  return "サーバーを選択";
 }
 
 function supportMessageCounter() {
