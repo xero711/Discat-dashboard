@@ -3260,6 +3260,30 @@ input[type="checkbox"]:checked::before {
   line-height: 1.55;
 }
 
+.guard-moderation-add-list {
+  align-content: start;
+}
+
+.guard-moderation-add-list select {
+  min-height: 44px;
+  padding: 0 12px;
+  line-height: 1.1;
+}
+
+.guard-moderation-log-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 54px;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.guard-moderation-log-row__remove {
+  align-self: stretch;
+  width: 54px;
+  min-width: 54px;
+  padding: 0;
+}
+
 .guard-moderation-channel-field select[multiple] {
   min-height: 132px;
   padding: 8px 10px;

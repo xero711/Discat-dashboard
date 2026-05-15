@@ -251,11 +251,11 @@ const GUARD_MODERATION_ACTIONS = [
 ];
 
 const GUARD_MODERATION_DEFAULTS = {
-  invite_spam: { enabled: true, level: "medium", action: "kick", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
-  other_links: { enabled: true, level: "high", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
-  spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
-  profanity: { enabled: true, level: "medium", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
-  sexual_language: { enabled: true, level: "medium", action: "delete", log_channel_id: "", target_channel_ids: [], all_channels_enabled: true },
+  invite_spam: { enabled: true, level: "medium", action: "kick", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  other_links: { enabled: true, level: "high", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  profanity: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  sexual_language: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
 };
 
 const GUARD_LOGGING_EVENTS = [
@@ -2868,15 +2868,41 @@ function normalizeGuardModerationChannelIds(value) {
     .filter((item, index, array) => item && /^\d+$/.test(item) && array.indexOf(item) === index);
 }
 
+function normalizeGuardModerationChannelRows(value) {
+  const rawItems = Array.isArray(value) ? value : value ? [value] : [];
+  const seen = new Set();
+  const rows = [];
+  rawItems.forEach((item) => {
+    const channelId = String(item ?? "").trim();
+    if (!channelId) {
+      rows.push("");
+      return;
+    }
+    if (/^\d+$/.test(channelId) && !seen.has(channelId)) {
+      seen.add(channelId);
+      rows.push(channelId);
+    }
+  });
+  return rows;
+}
+
 function normalizeGuardModerationFeatureSettings(featureId, settings) {
   const defaults = GUARD_MODERATION_DEFAULTS[featureId] ?? {
     enabled: true,
     level: "medium",
     action: "delete",
     log_channel_id: "",
+    log_channel_ids: [],
     target_channel_ids: [],
     all_channels_enabled: true,
   };
+  const rawLogChannelRows = Array.isArray(settings?.log_channel_ids)
+    ? settings.log_channel_ids
+    : settings?.log_channel_id
+      ? [settings.log_channel_id]
+      : defaults.log_channel_ids;
+  const logChannelIds = normalizeGuardModerationChannelRows(rawLogChannelRows);
+  const firstLogChannelId = logChannelIds.find((item) => item) ?? "";
   const rawAllChannelsEnabled = settings?.all_channels_enabled;
   const allChannelsEnabled = rawAllChannelsEnabled == null
     ? !Boolean(settings?.all_channels_disabled)
@@ -2885,7 +2911,8 @@ function normalizeGuardModerationFeatureSettings(featureId, settings) {
     enabled: settings?.enabled !== false,
     level: normalizeGuardModerationLevel(settings?.level ?? defaults.level),
     action: normalizeGuardModerationAction(settings?.action, defaults.action),
-    log_channel_id: String(settings?.log_channel_id ?? defaults.log_channel_id ?? ""),
+    log_channel_id: firstLogChannelId,
+    log_channel_ids: logChannelIds,
     target_channel_ids: normalizeGuardModerationChannelIds(settings?.target_channel_ids ?? settings?.disabled_channel_ids ?? defaults.target_channel_ids),
     all_channels_enabled: allChannelsEnabled,
   };
@@ -3525,7 +3552,7 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
             ${GUARD_MODERATION_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
           </select>
         </label>
-        ${renderGuardModerationChannelField(feature.id, normalized.log_channel_id, guild)}
+        ${renderGuardModerationLogChannelsField(feature.id, normalized.log_channel_ids, guild)}
         ${renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.target_channel_ids, guild)}
       </div>
     </article>
@@ -3553,6 +3580,45 @@ function renderGuardModerationChannelField(featureId, selectedValue, guild) {
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
       </select>
     </label>
+  `;
+}
+
+function renderGuardModerationLogChannelsField(featureId, selectedValues, guild) {
+  const channels = guild?.text_channels ?? [];
+  const rows = normalizeGuardModerationChannelRows(selectedValues);
+  return `
+    <div class="guard-moderation-log-field guard-moderation-add-list auto-rules">
+      <div class="auto-rules__header">
+        <span>処罰ログチャンネル</span>
+        <button class="icon-button icon-button--ghost" type="button" data-action="add-guard-moderation-log-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" ${channels.length ? "" : "disabled"}>
+          ${icon("plus")}<span>追加</span>
+        </button>
+      </div>
+      <div class="auto-rules__list">
+        ${
+          rows.length > 0
+            ? rows.map((channelId, index) => renderGuardModerationLogChannelRow(featureId, channelId, index, channels)).join("")
+            : `<div class="empty-state">処罰ログチャンネルはまだ追加されていません。</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderGuardModerationLogChannelRow(featureId, channelId, index, channels) {
+  return `
+    <div class="guard-moderation-log-row">
+      <label class="field auto-rule-row__field">
+        <span>送信先</span>
+        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_ids" data-index="${index}" ${channels.length ? "" : "disabled"}>
+          <option value="">未設定</option>
+          ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${String(channel.id) === channelId ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
+        </select>
+      </label>
+      <button class="icon-button icon-button--ghost guard-moderation-log-row__remove" type="button" data-action="remove-guard-moderation-log-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-index="${index}" title="削除">
+        ${icon("trash")}
+      </button>
+    </div>
   `;
 }
 
@@ -4096,6 +4162,25 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   }
   const form = normalizeGuardModerationForm(state.guard.moderationForm);
   const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  if (field === "log_channel_ids") {
+    const index = Number(target.dataset.index);
+    if (!Number.isInteger(index) || index < 0) {
+      return;
+    }
+    const logChannelIds = [...currentFeature.log_channel_ids];
+    logChannelIds[index] = String(target.value ?? "").trim();
+    form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+      ...currentFeature,
+      log_channel_ids: logChannelIds,
+    });
+    state.guard.moderationForm = form;
+    state.guard.moderationError = null;
+    updateDirtyState("guardModeration");
+    if (options.renderAfter) {
+      render();
+    }
+    return;
+  }
   if (field === "target_channel_ids_add") {
     const channelId = String(target.value ?? "").trim();
     if (!channelId) {
@@ -4140,6 +4225,46 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   if (options.renderAfter) {
     render();
   }
+}
+
+function addGuardModerationLogChannel(featureId) {
+  if (!GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  const logChannelIds = [...currentFeature.log_channel_ids];
+  if (!logChannelIds.includes("")) {
+    logChannelIds.push("");
+  }
+  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+    ...currentFeature,
+    log_channel_ids: logChannelIds,
+  });
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
+}
+
+function removeGuardModerationLogChannel(featureId, index) {
+  if (!GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
+    return;
+  }
+  const rowIndex = Number(index);
+  if (!Number.isInteger(rowIndex) || rowIndex < 0) {
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+    ...currentFeature,
+    log_channel_ids: currentFeature.log_channel_ids.filter((_, itemIndex) => itemIndex !== rowIndex),
+  });
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
 }
 
 function removeGuardModerationTargetChannel(featureId, channelId) {
@@ -5938,6 +6063,10 @@ function handleClick(event) {
       void saveGuardVerificationSettings();
     } else if (action === "save-guard-moderation-settings") {
       void saveGuardModerationSettings();
+    } else if (action === "add-guard-moderation-log-channel") {
+      addGuardModerationLogChannel(actionEl.dataset.guardModerationFeature);
+    } else if (action === "remove-guard-moderation-log-channel") {
+      removeGuardModerationLogChannel(actionEl.dataset.guardModerationFeature, actionEl.dataset.index);
     } else if (action === "remove-guard-moderation-channel") {
       removeGuardModerationTargetChannel(actionEl.dataset.guardModerationFeature, actionEl.dataset.channelId);
     } else if (action === "save-guard-logging-settings") {
