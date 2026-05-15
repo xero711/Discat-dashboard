@@ -52,9 +52,30 @@ const SUPPORT_REQUIREMENTS = [
 ];
 
 const TTS_ENGINES = [
-  { value: "voicevox", label: "VOICEVOX" },
-  { value: "aivis", label: "AivisSpeech" },
-  { value: "coeiroink", label: "COEIROINK" },
+  {
+    value: "voicevox",
+    label: "VOICEVOX",
+    badge: "RX7600推奨",
+    accelerator: "DirectML GPU",
+    detail: "声数最多で高速。通常運用向け。",
+    optionDetail: "RX7600推奨 / DirectML GPU / 声数最多",
+  },
+  {
+    value: "aivis",
+    label: "AivisSpeech",
+    badge: "高品質",
+    accelerator: "DirectML GPU",
+    detail: "高品質な読み上げ向け。追加モデルに対応。",
+    optionDetail: "高品質 / DirectML GPU",
+  },
+  {
+    value: "coeiroink",
+    label: "COEIROINK",
+    badge: "追加音声",
+    accelerator: "DirectML",
+    detail: "追加音声用。CUDAではなくDirectMLで起動。",
+    optionDetail: "DirectML / 追加音声",
+  },
 ];
 
 const USER_PAGE = {
@@ -5375,6 +5396,7 @@ function renderTtsSettingsForm() {
   const voices = state.ttsOptions?.voices?.[settings.tts_engine] ?? [];
   const availableVoices = voices.filter((voice) => voice.available !== false);
   const unavailableVoices = voices.filter((voice) => voice.available === false);
+  const engine = ttsEngineMeta(settings.tts_engine);
   const voiceAvailabilityLabel = !state.ttsOptions
     ? "取得中"
     : voices.length === 0
@@ -5391,9 +5413,21 @@ function renderTtsSettingsForm() {
         <label class="field">
           <span>デフォルト読み上げエンジン</span>
           <select data-settings-field="tts_engine">
-            ${TTS_ENGINES.map((engine) => `<option value="${engine.value}" ${engine.value === settings.tts_engine ? "selected" : ""}>${engine.label}</option>`).join("")}
+            ${TTS_ENGINES.map((item) => `<option value="${escapeAttribute(item.value)}" ${item.value === settings.tts_engine ? "selected" : ""}>${escapeHtml(ttsEngineOptionLabel(item))}</option>`).join("")}
           </select>
         </label>
+
+        <div class="tts-engine-status">
+          <div class="tts-engine-status__summary">
+            <strong>${escapeHtml(engine.label)}</strong>
+            <span>${escapeHtml(engine.detail)}</span>
+          </div>
+          <div class="tts-engine-status__chips">
+            <span class="tts-engine-status__chip tts-engine-status__chip--accent">${escapeHtml(engine.badge)}</span>
+            <span class="tts-engine-status__chip">${icon("activity")}<span>${escapeHtml(engine.accelerator)}</span></span>
+            <span class="tts-engine-status__chip">${icon("volume")}<span>${escapeHtml(voiceAvailabilityLabel)}</span></span>
+          </div>
+        </div>
 
         <label class="field">
           <div class="field__header">
@@ -5436,6 +5470,14 @@ function renderTtsSettingsForm() {
       }
     </section>
   `;
+}
+
+function ttsEngineMeta(engineKey) {
+  return TTS_ENGINES.find((engine) => engine.value === engineKey) ?? TTS_ENGINES[0];
+}
+
+function ttsEngineOptionLabel(engine) {
+  return `${engine.label} - ${engine.optionDetail}`;
 }
 
 function renderSettingsHeader(iconName, title, view, dirty) {
