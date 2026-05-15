@@ -332,6 +332,7 @@ class ApiError extends Error {
 
 function createDefaultSupportState() {
   return {
+    open: false,
     product: "",
     guildId: "",
     requirement: "",
@@ -501,6 +502,7 @@ document.addEventListener("visibilitychange", () => {
     void loadHostData({ silent: true, keepMessage: true });
   }
 });
+document.addEventListener("keydown", handleKeydown);
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
@@ -1446,6 +1448,7 @@ async function sendSupportInquiry() {
     });
     state.support = {
       ...createDefaultSupportState(),
+      open: true,
       product,
       guildId: guild.id,
       success: result?.message ?? "問い合わせを送信しました。",
@@ -2418,6 +2421,37 @@ function syncSupportGuildSelection() {
   }
 }
 
+function openSupportInquiry() {
+  if (!state.user) {
+    state.message = "問い合わせにはDiscordログインが必要です。";
+    render();
+    return;
+  }
+  state.support.open = true;
+  state.support.error = null;
+  state.support.success = null;
+  syncSupportGuildSelection();
+  if (state.support.product === "guard" && state.guard.source !== "api") {
+    void loadGuardData();
+  }
+  render();
+}
+
+function closeSupportInquiry() {
+  state.support.open = false;
+  state.support.error = null;
+  state.support.success = null;
+  render();
+}
+
+function resetSupportInquiryForm() {
+  state.support = {
+    ...createDefaultSupportState(),
+    open: true,
+  };
+  render();
+}
+
 function canViewHostAdmin() {
   return String(state.user?.discord_user_id ?? "") === HOST_CONTROL_ADMIN_DISCORD_USER_ID;
 }
@@ -2459,6 +2493,7 @@ function render() {
       <main class="dashboard">
         ${mainContent}
       </main>
+      ${statusOnly ? "" : renderSupportInquiryDialog()}
       ${statusOnly ? "" : renderStatusToasts()}
       ${statusOnly ? "" : renderUnsavedChangesPrompt()}
     </div>
@@ -2519,6 +2554,9 @@ function renderTopbar() {
         ${
           state.user
             ? `
+              <button class="icon-button icon-button--primary support-launch-button" type="button" data-action="open-support-inquiry">
+                ${icon("message")}<span>問い合わせ</span>
+              </button>
               <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
                 ${icon("external")}<span>サポートサーバー</span>
               </a>
@@ -4752,14 +4790,16 @@ function renderUserPage() {
           </div>
         </section>
       </div>
-      ${renderSupportInquiryPanel()}
       ${renderPlaylistPanel(playlist)}
       ${renderUserActivityPanel()}
     </section>
   `;
 }
 
-function renderSupportInquiryPanel() {
+function renderSupportInquiryDialog() {
+  if (!state.user || !state.support.open) {
+    return "";
+  }
   const support = state.support;
   const product = normalizeSupportProduct(support.product);
   const requirement = normalizeSupportRequirement(support.requirement);
@@ -4767,58 +4807,139 @@ function renderSupportInquiryPanel() {
   const selectedGuild = supportSelectedGuild();
   const guildDisabled = !product || support.sending || (product === "guard" && state.guard.loading) || !eligibleGuilds.length;
   const canSubmit = Boolean(product && support.guildId && requirement);
+  const progress = supportProgress();
   return `
-    <section class="feature-card support-panel" aria-label="開発者への問い合わせ">
-      <div class="feature-card__header">
-        <div class="panel-heading">
-          ${icon("message")}<h2>開発者への問い合わせ</h2>
-        </div>
-        <span class="feature-status ${support.success ? "feature-status--on" : ""}">${support.sending ? "送信中" : "DM送信"}</span>
-      </div>
-      ${support.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(support.error)}</span></p>` : ""}
-      ${support.success ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(support.success)}</span></p>` : ""}
-      <form class="support-form" data-support-form>
-        <div class="settings-grid support-form__grid">
-          <label class="field">
-            <span>問い合わせ先</span>
-            <select data-support-field="product" required ${support.sending ? "disabled" : ""}>
-              <option value="">Guard / One を選択</option>
-              ${SUPPORT_PRODUCTS.map((item) => `<option value="${escapeAttribute(item.id)}" ${product === item.id ? "selected" : ""}>${escapeHtml(item.label)}の問い合わせ</option>`).join("")}
-            </select>
-          </label>
-          <label class="field">
-            <span>対象サーバー</span>
-            <select data-support-field="guild_id" required ${guildDisabled ? "disabled" : ""}>
-              <option value="">${escapeHtml(supportGuildPlaceholder(product, eligibleGuilds))}</option>
-              ${eligibleGuilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${support.guildId === guild.id ? "selected" : ""}>${escapeHtml(guild.name)} (${escapeHtml(guild.id)})</option>`).join("")}
-            </select>
-          </label>
-          <label class="field">
-            <span>要件</span>
-            <select data-support-field="requirement" required ${support.sending ? "disabled" : ""}>
-              <option value="">要件を選択</option>
-              ${SUPPORT_REQUIREMENTS.map((item) => `<option value="${escapeAttribute(item.id)}" ${requirement === item.id ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="field ${supportRequiresOther() ? "" : "support-other-field--hidden"}">
-            <span>その他の要件</span>
-            <input type="text" maxlength="120" value="${escapeAttribute(support.requirementOther)}" data-support-field="requirement_other" placeholder="要件を入力" ${supportRequiresOther() ? "required" : ""} ${!supportRequiresOther() || support.sending ? "disabled" : ""} />
-          </label>
-          <label class="field support-message-field">
-            <span>メッセージ</span>
-            <textarea maxlength="${SUPPORT_MESSAGE_MAX_LENGTH}" rows="6" data-support-field="message" required placeholder="困っている内容、再現手順、希望する対応など" ${support.sending ? "disabled" : ""}>${escapeHtml(support.message)}</textarea>
-          </label>
-        </div>
-        ${renderSupportServerSummary(product, selectedGuild)}
-        <div class="support-form__footer">
-          <span data-support-counter>${escapeHtml(supportMessageCounter())}</span>
-          <button class="icon-button icon-button--primary" type="submit" ${!canSubmit || support.sending ? "disabled" : ""}>
-            ${icon("message")}<span>${support.sending ? "送信中" : "問い合わせを送信"}</span>
+    <div class="support-dialog-backdrop" data-support-backdrop>
+      <section class="support-dialog" role="dialog" aria-modal="true" aria-labelledby="support-dialog-title">
+        <div class="support-dialog__header">
+          <div class="panel-heading">
+            ${icon("message")}<h2 id="support-dialog-title">開発者への問い合わせ</h2>
+          </div>
+          <button class="support-dialog__close" type="button" data-action="close-support-inquiry" title="閉じる" aria-label="閉じる">
+            ${icon("error")}
           </button>
         </div>
-      </form>
+        <div class="support-dialog__progress" aria-label="入力進捗">
+          <span data-support-progress-label>${escapeHtml(`${progress.done}/${progress.total}`)}</span>
+          <div><i data-support-progress-bar style="width: ${escapeAttribute(progress.percent)}%"></i></div>
+        </div>
+        ${support.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(support.error)}</span></p>` : ""}
+        ${support.success ? renderSupportSuccess(support.success) : ""}
+        <form class="support-survey" data-support-form>
+          ${renderSupportQuestion(
+            "01",
+            "問い合わせ先",
+            `<div class="support-choice-grid support-choice-grid--products">
+              ${SUPPORT_PRODUCTS.map((item) => renderSupportChoice({
+                field: "product",
+                value: item.id,
+                label: `${item.label}の問い合わせ`,
+                checked: product === item.id,
+                disabled: support.sending,
+              })).join("")}
+            </div>`,
+          )}
+          ${renderSupportQuestion(
+            "02",
+            "対象サーバー",
+            `<label class="field support-survey__select">
+              <select data-support-field="guild_id" required ${guildDisabled ? "disabled" : ""}>
+                <option value="">${escapeHtml(supportGuildPlaceholder(product, eligibleGuilds))}</option>
+                ${eligibleGuilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${support.guildId === guild.id ? "selected" : ""}>${escapeHtml(guild.name)} (${escapeHtml(guild.id)})</option>`).join("")}
+              </select>
+            </label>
+            ${renderSupportServerSummary(product, selectedGuild)}`,
+          )}
+          ${renderSupportQuestion(
+            "03",
+            "要件",
+            `<div class="support-choice-grid">
+              ${SUPPORT_REQUIREMENTS.map((item) => renderSupportChoice({
+                field: "requirement",
+                value: item.id,
+                label: item.label,
+                checked: requirement === item.id,
+                disabled: support.sending,
+              })).join("")}
+            </div>
+            <label class="field support-other-field ${supportRequiresOther() ? "" : "support-other-field--hidden"}">
+              <span>その他の要件</span>
+              <input type="text" maxlength="120" value="${escapeAttribute(support.requirementOther)}" data-support-field="requirement_other" placeholder="要件を入力" ${supportRequiresOther() ? "required" : ""} ${!supportRequiresOther() || support.sending ? "disabled" : ""} />
+            </label>`,
+          )}
+          ${renderSupportQuestion(
+            "04",
+            "メッセージ",
+            `<label class="field support-message-field">
+              <textarea maxlength="${SUPPORT_MESSAGE_MAX_LENGTH}" rows="7" data-support-field="message" required placeholder="困っている内容、再現手順、希望する対応など" ${support.sending ? "disabled" : ""}>${escapeHtml(support.message)}</textarea>
+            </label>`,
+          )}
+          <div class="support-form__footer">
+            <span data-support-counter>${escapeHtml(supportMessageCounter())}</span>
+            <button class="icon-button icon-button--primary" type="submit" ${!canSubmit || support.sending ? "disabled" : ""}>
+              ${icon("message")}<span>${support.sending ? "送信中" : "問い合わせを送信"}</span>
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderSupportSuccess(message) {
+  return `
+    <div class="support-success">
+      ${icon("success")}
+      <span>${escapeHtml(message)}</span>
+      <button class="icon-button icon-button--ghost" type="button" data-action="reset-support-inquiry">
+        ${icon("plus")}<span>別の問い合わせ</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderSupportQuestion(number, title, body) {
+  return `
+    <section class="support-question">
+      <div class="support-question__header">
+        <span>${escapeHtml(number)}</span>
+        <h3>${escapeHtml(title)}</h3>
+      </div>
+      <div class="support-question__body">
+        ${body}
+      </div>
     </section>
   `;
+}
+
+function renderSupportChoice({ field, value, label, checked, disabled }) {
+  const inputId = `support-${field}-${value}`;
+  return `
+    <label class="support-choice ${checked ? "support-choice--selected" : ""}" for="${escapeAttribute(inputId)}">
+      <input id="${escapeAttribute(inputId)}" type="radio" name="support-${escapeAttribute(field)}" value="${escapeAttribute(value)}" data-support-field="${escapeAttribute(field)}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
+      <span>${escapeHtml(label)}</span>
+      ${checked ? icon("success") : ""}
+    </label>
+  `;
+}
+
+function supportProgress() {
+  const product = normalizeSupportProduct(state.support.product);
+  const requirement = normalizeSupportRequirement(state.support.requirement);
+  const guild = supportSelectedGuild();
+  const otherReady = requirement !== "other" || Boolean(state.support.requirementOther.trim());
+  const steps = [
+    Boolean(product),
+    Boolean(guild),
+    Boolean(requirement && otherReady),
+    Boolean(state.support.message.trim()),
+  ];
+  const done = steps.filter(Boolean).length;
+  return {
+    done,
+    total: steps.length,
+    percent: String(Math.round((done / steps.length) * 100)),
+  };
 }
 
 function renderSupportServerSummary(product, guild) {
@@ -5989,18 +6110,20 @@ function collectStatusToasts() {
     if (state.userActivityError) {
       toasts.push({ tone: "error", message: state.userActivityError });
     }
-    if (state.support.error) {
-      toasts.push({ tone: "error", message: state.support.error });
-    }
-    if (state.support.success) {
-      toasts.push({ tone: "success", message: state.support.success });
-    }
   } else if (view === "host") {
     if (state.hostError) {
       toasts.push({ tone: "error", message: state.hostError });
     }
     if (state.hostMessage) {
       toasts.push({ tone: "success", message: state.hostMessage });
+    }
+  }
+  if (state.user && !state.support.open) {
+    if (state.support.error) {
+      toasts.push({ tone: "error", message: state.support.error });
+    }
+    if (state.support.success) {
+      toasts.push({ tone: "success", message: state.support.success });
     }
   }
 
@@ -6301,9 +6424,21 @@ function handlePointerDown(event) {
   togglePlaylistTrackPlayback(trackId);
 }
 
+function handleKeydown(event) {
+  if (event.key === "Escape" && state.support.open) {
+    closeSupportInquiry();
+  }
+}
+
 function handleClick(event) {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) {
+    return;
+  }
+
+  const supportBackdrop = target.closest("[data-support-backdrop]");
+  if (supportBackdrop && target === supportBackdrop) {
+    closeSupportInquiry();
     return;
   }
 
@@ -6312,6 +6447,12 @@ function handleClick(event) {
     const action = actionEl.dataset.action;
     if (action === "switch-product") {
       void activateProduct(actionEl.dataset.product);
+    } else if (action === "open-support-inquiry") {
+      openSupportInquiry();
+    } else if (action === "close-support-inquiry") {
+      closeSupportInquiry();
+    } else if (action === "reset-support-inquiry") {
+      resetSupportInquiryForm();
     } else if (action === "guard-clear-api") {
       clearGuardApiBase();
     } else if (action === "guard-edit-verification-guild") {
@@ -6605,7 +6746,7 @@ function updateSupportField(target, options = { renderAfter: true }) {
   if (field === "product") {
     state.support.product = normalizeSupportProduct(value);
     syncSupportGuildSelection();
-    if (state.support.product === "guard" && !state.guard.loading && state.guard.source !== "api") {
+    if (state.support.product === "guard" && state.guard.source !== "api") {
       void loadGuardData();
     }
   } else if (field === "guild_id") {
@@ -6617,6 +6758,8 @@ function updateSupportField(target, options = { renderAfter: true }) {
     }
   } else if (field === "requirement_other") {
     state.support.requirementOther = String(value ?? "").slice(0, 120);
+    refreshSupportMessageCounter();
+    return;
   } else if (field === "message") {
     state.support.message = String(value ?? "").slice(0, SUPPORT_MESSAGE_MAX_LENGTH);
     refreshSupportMessageCounter();
@@ -6632,6 +6775,15 @@ function refreshSupportMessageCounter() {
   const counter = root.querySelector("[data-support-counter]");
   if (counter) {
     counter.textContent = supportMessageCounter();
+  }
+  const progress = supportProgress();
+  const progressLabel = root.querySelector("[data-support-progress-label]");
+  if (progressLabel) {
+    progressLabel.textContent = `${progress.done}/${progress.total}`;
+  }
+  const progressBar = root.querySelector("[data-support-progress-bar]");
+  if (progressBar instanceof HTMLElement) {
+    progressBar.style.width = `${progress.percent}%`;
   }
 }
 
