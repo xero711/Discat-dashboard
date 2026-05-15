@@ -410,6 +410,7 @@ const state = {
   },
   pendingPageId: null,
   pendingProductId: null,
+  pendingProductPageId: null,
   guard: {
     apiBase: configuredGuardApiBase(),
     apiError: null,
@@ -713,12 +714,17 @@ function writeProductPreference(productId) {
   }
 }
 
-async function activateProduct(productId) {
+async function activateProductPage(productId, options = {}) {
   const nextProduct = normalizeProductId(productId);
   if (!nextProduct) {
     return;
   }
+  const nextPageId = nextProduct === "one" ? normalizeOnePageId(options.pageId) : null;
   if (state.activeProduct === nextProduct) {
+    if (nextPageId && nextPageId !== state.activePage) {
+      requestPageChange(nextPageId);
+      return;
+    }
     clearPendingNavigation();
     render();
     return;
@@ -726,11 +732,15 @@ async function activateProduct(productId) {
   if (hasUnsavedChanges()) {
     clearPendingNavigation();
     state.pendingProductId = nextProduct;
+    state.pendingProductPageId = nextPageId;
     render();
     return;
   }
   const previousProduct = state.activeProduct;
   state.activeProduct = nextProduct;
+  if (nextPageId) {
+    state.activePage = nextPageId;
+  }
   writeProductPreference(nextProduct);
   stopOneAutoRefresh();
   stopGuardAutoRefresh();
@@ -752,6 +762,17 @@ async function activateProduct(productId) {
   }
 
   await loadOneDashboardData();
+}
+
+function normalizeOnePageId(pageId) {
+  if (!pageId) {
+    return null;
+  }
+  if (pageId === USER_PAGE.id) {
+    return USER_PAGE.id;
+  }
+  const pages = visibleSettingsPages();
+  return pages.find((page) => page.id === pageId)?.id ?? defaultServerPageId();
 }
 
 function renderProductTransition(fromProduct, toProduct) {
@@ -2609,15 +2630,33 @@ function renderTopbar() {
 }
 
 function renderProductSwitcher() {
+  const userActive = isUserPageTopNavActive();
   return `
     <div class="product-switcher" role="tablist" aria-label="Discat dashboard switch">
+      ${
+        state.user
+          ? `
+            <button class="product-switcher__item ${userActive ? "product-switcher__item--active" : ""}" type="button" role="tab" aria-selected="${userActive}" data-action="switch-user-page">
+              <span>ユーザーページ</span>
+            </button>
+          `
+          : ""
+      }
       ${Object.values(PRODUCT_META).map((product) => `
-        <button class="product-switcher__item ${state.activeProduct === product.id ? "product-switcher__item--active" : ""}" type="button" role="tab" aria-selected="${state.activeProduct === product.id}" data-action="switch-product" data-product="${product.id}">
+        <button class="product-switcher__item ${isProductTopNavActive(product.id) ? "product-switcher__item--active" : ""}" type="button" role="tab" aria-selected="${isProductTopNavActive(product.id)}" data-action="switch-product" data-product="${product.id}">
           <span>${escapeHtml(product.shortLabel)}</span>
         </button>
       `).join("")}
     </div>
   `;
+}
+
+function isUserPageTopNavActive() {
+  return Boolean(state.user) && state.activeProduct === "one" && activeSettingsView() === "user";
+}
+
+function isProductTopNavActive(productId) {
+  return state.activeProduct === productId && !isUserPageTopNavActive();
 }
 
 function loginButtonState() {
@@ -2768,7 +2807,6 @@ function renderDashboard() {
     return `
       <div class="dashboard-grid dashboard-grid--user">
         <div class="workspace workspace--user">
-          ${renderDashboardModeNav()}
           <div class="workspace-main workspace-main--user">
             <div class="workspace__title">
               <span>${page.eyebrow}</span>
@@ -2784,7 +2822,6 @@ function renderDashboard() {
     <div class="dashboard-grid">
       ${renderGuildList()}
       <div class="workspace">
-        ${renderDashboardModeNav()}
         <div class="workspace-layout">
           ${renderFunctionSidebar()}
           <div class="workspace-main">
@@ -2797,20 +2834,6 @@ function renderDashboard() {
         </div>
       </div>
     </div>
-  `;
-}
-
-function renderDashboardModeNav() {
-  const userActive = activeSettingsView() === "user";
-  return `
-    <nav class="dashboard-mode-nav" aria-label="ダッシュボードページ">
-      <button class="dashboard-mode-nav__item ${userActive ? "dashboard-mode-nav__item--active" : ""}" type="button" data-dashboard-page="user" aria-current="${userActive ? "page" : "false"}">
-        ${icon("user")}<span>ユーザーページ</span>
-      </button>
-      <button class="dashboard-mode-nav__item ${!userActive ? "dashboard-mode-nav__item--active" : ""}" type="button" data-dashboard-page="server" aria-current="${!userActive ? "page" : "false"}">
-        ${icon("server")}<span>サーバー設定</span>
-      </button>
-    </nav>
   `;
 }
 
@@ -6136,7 +6159,11 @@ function snapshotPendingNavigation() {
     return { type: "page", pageId: state.pendingPageId };
   }
   if (state.pendingProductId) {
-    return { type: "product", productId: state.pendingProductId };
+    return {
+      type: "product",
+      productId: state.pendingProductId,
+      pageId: state.pendingProductPageId,
+    };
   }
   if (state.guard.pendingFeatureId) {
     return { type: "guard-feature", featureId: state.guard.pendingFeatureId };
@@ -6150,6 +6177,7 @@ function snapshotPendingNavigation() {
 function clearPendingNavigation() {
   state.pendingPageId = null;
   state.pendingProductId = null;
+  state.pendingProductPageId = null;
   state.guard.pendingFeatureId = null;
   state.guard.pendingGuildId = null;
 }
@@ -6161,7 +6189,7 @@ async function completePendingNavigation(pending) {
     return;
   }
   if (pending.type === "product") {
-    await activateProduct(pending.productId);
+    await activateProductPage(pending.productId, { pageId: pending.pageId });
     return;
   }
   if (pending.type === "page") {
@@ -6242,16 +6270,6 @@ function requestGuardGuildChange(guildId) {
   state.guildListCollapsed = true;
   clearPendingNavigation();
   render();
-}
-
-function requestDashboardPageChange(pageId) {
-  const nextPageId =
-    pageId === "user"
-      ? USER_PAGE.id
-      : state.activePage === USER_PAGE.id
-        ? defaultServerPageId()
-        : state.activePage;
-  requestPageChange(nextPageId);
 }
 
 function loadActivePageData() {
@@ -6416,7 +6434,12 @@ function handleClick(event) {
   if (actionEl) {
     const action = actionEl.dataset.action;
     if (action === "switch-product") {
-      void activateProduct(actionEl.dataset.product);
+      const productId = actionEl.dataset.product;
+      void activateProductPage(productId, {
+        pageId: productId === "one" ? defaultServerPageId() : null,
+      });
+    } else if (action === "switch-user-page") {
+      void activateProductPage("one", { pageId: USER_PAGE.id });
     } else if (action === "open-support-inquiry") {
       openSupportInquiry();
     } else if (action === "close-support-inquiry") {
@@ -6544,13 +6567,6 @@ function handleClick(event) {
     }
     return;
   }
-
-  const dashboardPageEl = target.closest("[data-dashboard-page]");
-  if (dashboardPageEl) {
-    requestDashboardPageChange(dashboardPageEl.dataset.dashboardPage);
-    return;
-  }
-
   const guardFeatureEl = target.closest("[data-guard-feature]");
   if (guardFeatureEl && state.activeProduct === "guard") {
     const featureId = guardFeatureEl.dataset.guardFeature;

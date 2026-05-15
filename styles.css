@@ -453,59 +453,6 @@ body.body--guard.body--status-only .app-shell--guard {
   grid-area: workspace;
 }
 
-.dashboard-mode-nav {
-  display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  width: min(100%, 420px);
-  border: 1px solid rgba(231, 220, 255, 0.32);
-  border-radius: 8px;
-  padding: 4px;
-  background: rgba(14, 9, 28, 0.72);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 10px 28px rgba(9, 3, 22, 0.22);
-}
-
-.dashboard-mode-nav__item {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 38px;
-  gap: 8px;
-  border: 1px solid rgba(231, 220, 255, 0.14);
-  border-radius: 6px;
-  padding: 0 12px;
-  background: rgba(255, 255, 255, 0.045);
-  color: #eadfff;
-  font-size: 0.86rem;
-  font-weight: 820;
-}
-
-.dashboard-mode-nav__item .svg-icon {
-  width: 17px;
-  height: 17px;
-}
-
-.dashboard-mode-nav__item span {
-  white-space: nowrap;
-}
-
-.dashboard-mode-nav__item:hover {
-  border-color: rgba(111, 232, 255, 0.46);
-  background: rgba(111, 232, 255, 0.12);
-  color: var(--text-strong);
-}
-
-.dashboard-mode-nav__item--active {
-  border-color: rgba(111, 232, 255, 0.72);
-  background: linear-gradient(135deg, rgba(111, 232, 255, 0.28), rgba(143, 97, 255, 0.26) 52%, rgba(255, 119, 200, 0.2));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 0 0 1px rgba(111, 232, 255, 0.12);
-  color: var(--text-strong);
-}
-
 .panel-heading {
   display: flex;
   align-items: center;
@@ -3085,27 +3032,6 @@ input[type="checkbox"]:checked::before {
     linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(102, 215, 236, 0.045) 42%, transparent),
     var(--panel);
   box-shadow: var(--shadow);
-}
-
-.app-shell--guard .dashboard-mode-nav {
-  border-color: rgba(110, 223, 242, 0.2);
-  background: rgba(8, 26, 34, 0.82);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 28px rgba(0, 7, 12, 0.26);
-}
-
-.app-shell--guard .dashboard-mode-nav__item {
-  border-color: rgba(110, 223, 242, 0.12);
-  background: rgba(16, 39, 50, 0.58);
-  color: var(--muted);
-}
-
-.app-shell--guard .dashboard-mode-nav__item:hover,
-.app-shell--guard .dashboard-mode-nav__item--active {
-  border-color: rgba(102, 215, 236, 0.54);
-  background: linear-gradient(135deg, rgba(45, 169, 197, 0.24), rgba(102, 215, 236, 0.14));
-  color: var(--text-strong);
 }
 
 .app-shell--guard .field,
