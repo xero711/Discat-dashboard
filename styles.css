@@ -1286,6 +1286,86 @@ body.body--guard.body--status-only .app-shell--guard {
   font-weight: 640;
 }
 
+.support-panel {
+  gap: 14px;
+}
+
+.support-form {
+  display: grid;
+  gap: 14px;
+}
+
+.support-form__grid {
+  align-items: end;
+}
+
+.support-message-field {
+  grid-column: 1 / -1;
+}
+
+.support-message-field textarea {
+  min-height: 138px;
+}
+
+.support-other-field--hidden {
+  opacity: 0.62;
+}
+
+.support-server-summary {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(117, 245, 186, 0.24);
+  border-radius: 8px;
+  padding: 12px;
+  background:
+    linear-gradient(135deg, rgba(117, 245, 186, 0.1), rgba(111, 232, 255, 0.06)),
+    rgba(17, 9, 30, 0.24);
+}
+
+.support-server-summary .guild-row__icon {
+  width: 48px;
+  height: 48px;
+}
+
+.support-server-summary strong,
+.support-server-summary small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.support-server-summary strong {
+  color: var(--text-strong);
+  font-size: 0.98rem;
+  font-weight: 850;
+}
+
+.support-server-summary small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.support-form__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.support-form__footer span {
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 720;
+}
+
 .user-activity-panel {
   gap: 12px;
 }
@@ -3641,6 +3721,7 @@ input[type="checkbox"]:checked::before {
   .host-admin__toolbar,
   .feature-card__actions,
   .playlist-drop-zone,
+  .support-form__footer,
   .host-storage__header {
     justify-content: stretch;
   }
@@ -3648,6 +3729,7 @@ input[type="checkbox"]:checked::before {
   .host-admin__toolbar > *,
   .feature-card__actions > *,
   .playlist-drop-zone > *,
+  .support-form__footer > *,
   .refresh-pill {
     width: 100%;
   }

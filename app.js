@@ -35,6 +35,21 @@ const TTS_TEXT_LENGTH_DEFAULT = 20;
 const TTS_TEXT_LENGTH_MIN = 1;
 const TTS_TEXT_LENGTH_MAX = 100;
 const HOST_CONTROL_ADMIN_DISCORD_USER_ID = "907254481371144243";
+const SUPPORT_MESSAGE_MAX_LENGTH = 1900;
+
+const SUPPORT_PRODUCTS = [
+  { id: "one", label: "Discat One" },
+  { id: "guard", label: "Discat Guard" },
+];
+
+const SUPPORT_REQUIREMENTS = [
+  { id: "bug", label: "不具合・エラー" },
+  { id: "settings", label: "設定の相談" },
+  { id: "permissions", label: "権限・導入" },
+  { id: "feature_request", label: "機能要望" },
+  { id: "report", label: "通報・緊急相談" },
+  { id: "other", label: "その他" },
+];
 
 const TTS_ENGINES = [
   { value: "voicevox", label: "VOICEVOX" },
@@ -315,6 +330,19 @@ class ApiError extends Error {
   }
 }
 
+function createDefaultSupportState() {
+  return {
+    product: "",
+    guildId: "",
+    requirement: "",
+    requirementOther: "",
+    message: "",
+    sending: false,
+    error: null,
+    success: null,
+  };
+}
+
 const state = {
   activeProduct: readInitialProduct(),
   productTransition: null,
@@ -355,6 +383,7 @@ const state = {
   userActivityLoading: false,
   userActivityError: null,
   activeActivityPeriod: "daily",
+  support: createDefaultSupportState(),
   security: {
     loading: true,
     enabled: false,
@@ -1037,6 +1066,11 @@ const api = {
       method: "POST",
       body: JSON.stringify({ action }),
     }),
+  sendSupportInquiry: (payload) =>
+    request("/support/inquiries", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   updateSettings: (guildId, patch) =>
     request(`/guilds/${encodeURIComponent(guildId)}/settings`, {
       method: "PATCH",
@@ -1091,6 +1125,7 @@ async function loadAccount() {
       currentGuild?.bot_present && currentGuild.can_manage
         ? state.selectedGuildId
         : (guilds.find((guild) => guild.bot_present && guild.can_manage)?.id ?? null);
+    syncSupportGuildSelection();
     render();
     if (state.selectedGuildId && activeSettingsView() !== "user") {
       await loadGuildData(state.selectedGuildId);
@@ -1142,6 +1177,7 @@ async function loadGuardAccountContext(options = {}) {
       currentGuild?.bot_present && currentGuild.can_manage
         ? state.selectedGuildId
         : (state.guilds.find((guild) => guild.bot_present && guild.can_manage)?.id ?? null);
+    syncSupportGuildSelection();
     hydrateGuardVerificationForm();
     hydrateGuardModerationForm();
   } catch (error) {
@@ -1354,6 +1390,71 @@ async function loadUserActivity(options = {}) {
       state.userActivityLoading = false;
       render();
     }
+  }
+}
+
+async function sendSupportInquiry() {
+  const product = normalizeSupportProduct(state.support.product);
+  const requirement = normalizeSupportRequirement(state.support.requirement);
+  syncSupportGuildSelection();
+  const guild = supportSelectedGuild();
+  const message = state.support.message.trim();
+  const requirementOther = state.support.requirementOther.trim();
+
+  if (!product) {
+    state.support.error = "Discat Guard か Discat One のどちらへの問い合わせかを選択してください。";
+    state.support.success = null;
+    render();
+    return;
+  }
+  if (!guild) {
+    state.support.error = `${supportProductLabel(product)} BOTが入っていて、あなたが管理権限を持つサーバーを選択してください。`;
+    state.support.success = null;
+    render();
+    return;
+  }
+  if (!requirement) {
+    state.support.error = "要件を選択してください。";
+    state.support.success = null;
+    render();
+    return;
+  }
+  if (requirement === "other" && !requirementOther) {
+    state.support.error = "その他の要件を入力してください。";
+    state.support.success = null;
+    render();
+    return;
+  }
+  if (!message) {
+    state.support.error = "メッセージを入力してください。";
+    state.support.success = null;
+    render();
+    return;
+  }
+
+  state.support.sending = true;
+  state.support.error = null;
+  state.support.success = null;
+  render();
+  try {
+    const result = await api.sendSupportInquiry({
+      product,
+      guild_id: guild.id,
+      requirement,
+      requirement_other: requirement === "other" ? requirementOther : null,
+      message,
+    });
+    state.support = {
+      ...createDefaultSupportState(),
+      product,
+      guildId: guild.id,
+      success: result?.message ?? "問い合わせを送信しました。",
+    };
+  } catch (error) {
+    state.support.error = error instanceof Error ? error.message : "問い合わせの送信に失敗しました。";
+  } finally {
+    state.support.sending = false;
+    render();
   }
 }
 
@@ -2257,6 +2358,7 @@ function resetSessionState() {
   state.userActivityLoading = false;
   state.userActivityError = null;
   state.activeActivityPeriod = "daily";
+  state.support = createDefaultSupportState();
   resetDirtyViews();
   render();
 }
@@ -2268,6 +2370,52 @@ function selectedGuild() {
 function selectedGuildCanConfigure() {
   const guild = selectedGuild();
   return Boolean(guild?.bot_present && guild.can_manage);
+}
+
+function normalizeSupportProduct(value) {
+  const product = String(value ?? "").toLowerCase();
+  return SUPPORT_PRODUCTS.some((item) => item.id === product) ? product : "";
+}
+
+function normalizeSupportRequirement(value) {
+  const requirement = String(value ?? "").toLowerCase();
+  return SUPPORT_REQUIREMENTS.some((item) => item.id === requirement) ? requirement : "";
+}
+
+function supportProductLabel(product) {
+  return SUPPORT_PRODUCTS.find((item) => item.id === product)?.label ?? "BOT";
+}
+
+function supportEligibleGuilds(product = state.support.product) {
+  const normalizedProduct = normalizeSupportProduct(product);
+  if (normalizedProduct === "guard") {
+    return guardConfigurableGuilds();
+  }
+  if (normalizedProduct === "one") {
+    return state.guilds.filter((guild) => guild.bot_present && guild.can_manage);
+  }
+  return [];
+}
+
+function supportSelectedGuild() {
+  const product = normalizeSupportProduct(state.support.product);
+  return supportEligibleGuilds(product).find((guild) => guild.id === state.support.guildId) ?? null;
+}
+
+function supportRequiresOther() {
+  return normalizeSupportRequirement(state.support.requirement) === "other";
+}
+
+function syncSupportGuildSelection() {
+  const product = normalizeSupportProduct(state.support.product);
+  if (!product) {
+    state.support.guildId = "";
+    return;
+  }
+  const guilds = supportEligibleGuilds(product);
+  if (!guilds.some((guild) => guild.id === state.support.guildId)) {
+    state.support.guildId = guilds[0]?.id ?? "";
+  }
 }
 
 function canViewHostAdmin() {
@@ -2663,6 +2811,7 @@ async function loadGuardData(options = {}) {
       hydrateGuardVerificationForm();
       hydrateGuardModerationForm();
       hydrateGuardLoggingForm();
+      syncSupportGuildSelection();
       state.guard.source = "api";
       state.guard.loadedAt = new Date().toISOString();
       state.guard.loading = false;
@@ -2700,6 +2849,7 @@ async function loadGuardData(options = {}) {
   hydrateGuardVerificationForm();
   hydrateGuardModerationForm();
   hydrateGuardLoggingForm();
+  syncSupportGuildSelection();
   state.guard.loading = false;
   if (options.renderAfter !== false) {
     render();
@@ -4602,10 +4752,111 @@ function renderUserPage() {
           </div>
         </section>
       </div>
+      ${renderSupportInquiryPanel()}
       ${renderPlaylistPanel(playlist)}
       ${renderUserActivityPanel()}
     </section>
   `;
+}
+
+function renderSupportInquiryPanel() {
+  const support = state.support;
+  const product = normalizeSupportProduct(support.product);
+  const requirement = normalizeSupportRequirement(support.requirement);
+  const eligibleGuilds = supportEligibleGuilds(product);
+  const selectedGuild = supportSelectedGuild();
+  const guildDisabled = !product || support.sending || (product === "guard" && state.guard.loading) || !eligibleGuilds.length;
+  const canSubmit = Boolean(product && support.guildId && requirement);
+  return `
+    <section class="feature-card support-panel" aria-label="開発者への問い合わせ">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("message")}<h2>開発者への問い合わせ</h2>
+        </div>
+        <span class="feature-status ${support.success ? "feature-status--on" : ""}">${support.sending ? "送信中" : "DM送信"}</span>
+      </div>
+      ${support.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(support.error)}</span></p>` : ""}
+      ${support.success ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(support.success)}</span></p>` : ""}
+      <form class="support-form" data-support-form>
+        <div class="settings-grid support-form__grid">
+          <label class="field">
+            <span>問い合わせ先</span>
+            <select data-support-field="product" required ${support.sending ? "disabled" : ""}>
+              <option value="">Guard / One を選択</option>
+              ${SUPPORT_PRODUCTS.map((item) => `<option value="${escapeAttribute(item.id)}" ${product === item.id ? "selected" : ""}>${escapeHtml(item.label)}の問い合わせ</option>`).join("")}
+            </select>
+          </label>
+          <label class="field">
+            <span>対象サーバー</span>
+            <select data-support-field="guild_id" required ${guildDisabled ? "disabled" : ""}>
+              <option value="">${escapeHtml(supportGuildPlaceholder(product, eligibleGuilds))}</option>
+              ${eligibleGuilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${support.guildId === guild.id ? "selected" : ""}>${escapeHtml(guild.name)} (${escapeHtml(guild.id)})</option>`).join("")}
+            </select>
+          </label>
+          <label class="field">
+            <span>要件</span>
+            <select data-support-field="requirement" required ${support.sending ? "disabled" : ""}>
+              <option value="">要件を選択</option>
+              ${SUPPORT_REQUIREMENTS.map((item) => `<option value="${escapeAttribute(item.id)}" ${requirement === item.id ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="field ${supportRequiresOther() ? "" : "support-other-field--hidden"}">
+            <span>その他の要件</span>
+            <input type="text" maxlength="120" value="${escapeAttribute(support.requirementOther)}" data-support-field="requirement_other" placeholder="要件を入力" ${supportRequiresOther() ? "required" : ""} ${!supportRequiresOther() || support.sending ? "disabled" : ""} />
+          </label>
+          <label class="field support-message-field">
+            <span>メッセージ</span>
+            <textarea maxlength="${SUPPORT_MESSAGE_MAX_LENGTH}" rows="6" data-support-field="message" required placeholder="困っている内容、再現手順、希望する対応など" ${support.sending ? "disabled" : ""}>${escapeHtml(support.message)}</textarea>
+          </label>
+        </div>
+        ${renderSupportServerSummary(product, selectedGuild)}
+        <div class="support-form__footer">
+          <span data-support-counter>${escapeHtml(supportMessageCounter())}</span>
+          <button class="icon-button icon-button--primary" type="submit" ${!canSubmit || support.sending ? "disabled" : ""}>
+            ${icon("message")}<span>${support.sending ? "送信中" : "問い合わせを送信"}</span>
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+function renderSupportServerSummary(product, guild) {
+  if (!product) {
+    return `<div class="empty-state">問い合わせ先として Discat Guard か Discat One を選択してください。</div>`;
+  }
+  if (product === "guard" && state.guard.loading) {
+    return `<div class="empty-state">Guard BOTが入っているサーバー情報を確認しています。</div>`;
+  }
+  if (!guild) {
+    return `<div class="empty-state">${escapeHtml(supportGuildPlaceholder(product, supportEligibleGuilds(product)))}</div>`;
+  }
+  return `
+    <div class="support-server-summary">
+      ${renderGuildIcon(guild)}
+      <span>
+        <strong>${escapeHtml(guild.name)}</strong>
+        <small>${escapeHtml(supportProductLabel(product))} BOT参加済み / 管理権限あり / ID ${escapeHtml(guild.id)}</small>
+      </span>
+    </div>
+  `;
+}
+
+function supportGuildPlaceholder(product, eligibleGuilds) {
+  if (!product) {
+    return "先に問い合わせ先を選択してください";
+  }
+  if (product === "guard" && state.guard.loading) {
+    return "Guardサーバー情報を確認中です";
+  }
+  if (!eligibleGuilds.length) {
+    return `${supportProductLabel(product)} BOTが入っていて管理権限があるサーバーがありません`;
+  }
+  return "サーバーを選択";
+}
+
+function supportMessageCounter() {
+  return `${state.support.message.length}/${SUPPORT_MESSAGE_MAX_LENGTH}`;
 }
 
 function renderUserActivityPanel() {
@@ -5738,6 +5989,12 @@ function collectStatusToasts() {
     if (state.userActivityError) {
       toasts.push({ tone: "error", message: state.userActivityError });
     }
+    if (state.support.error) {
+      toasts.push({ tone: "error", message: state.support.error });
+    }
+    if (state.support.success) {
+      toasts.push({ tone: "success", message: state.support.success });
+    }
   } else if (view === "host") {
     if (state.hostError) {
       toasts.push({ tone: "error", message: state.hostError });
@@ -5971,7 +6228,10 @@ async function discardPendingSettings() {
 
 function handleSubmit(event) {
   const target = event.target;
-  if (target instanceof HTMLFormElement && target.matches("[data-playlist-url-form]")) {
+  if (target instanceof HTMLFormElement && target.matches("[data-support-form]")) {
+    event.preventDefault();
+    void sendSupportInquiry();
+  } else if (target instanceof HTMLFormElement && target.matches("[data-playlist-url-form]")) {
     event.preventDefault();
     void addPlaylistUrl();
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-verification-form]")) {
@@ -6241,6 +6501,8 @@ function handleChange(event) {
     updateGuardModerationField(target, { renderAfter: true });
   } else if (target.dataset.guardLoggingField) {
     updateGuardLoggingField(target, { renderAfter: true });
+  } else if (target.dataset.supportField) {
+    updateSupportField(target);
   } else if (target.dataset.settingsField) {
     updateSettingsField(target);
   } else if (target.dataset.autoRuleField) {
@@ -6288,6 +6550,11 @@ function handleInput(event) {
     return;
   }
 
+  if (target.dataset.supportField) {
+    updateSupportField(target, { renderAfter: false });
+    return;
+  }
+
   if (target.dataset.playlistField === "url") {
     state.playlistUrl = target.value;
     return;
@@ -6323,6 +6590,48 @@ function handleInput(event) {
 
   if (target.dataset.settingsField) {
     updateSettingsField(target, { renderAfter: false });
+  }
+}
+
+function updateSupportField(target, options = { renderAfter: true }) {
+  const field = target.dataset.supportField;
+  if (!field) {
+    return;
+  }
+  const value = target.value;
+  state.support.error = null;
+  state.support.success = null;
+
+  if (field === "product") {
+    state.support.product = normalizeSupportProduct(value);
+    syncSupportGuildSelection();
+    if (state.support.product === "guard" && !state.guard.loading && state.guard.source !== "api") {
+      void loadGuardData();
+    }
+  } else if (field === "guild_id") {
+    state.support.guildId = String(value ?? "").trim();
+  } else if (field === "requirement") {
+    state.support.requirement = normalizeSupportRequirement(value);
+    if (!supportRequiresOther()) {
+      state.support.requirementOther = "";
+    }
+  } else if (field === "requirement_other") {
+    state.support.requirementOther = String(value ?? "").slice(0, 120);
+  } else if (field === "message") {
+    state.support.message = String(value ?? "").slice(0, SUPPORT_MESSAGE_MAX_LENGTH);
+    refreshSupportMessageCounter();
+    return;
+  }
+
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function refreshSupportMessageCounter() {
+  const counter = root.querySelector("[data-support-counter]");
+  if (counter) {
+    counter.textContent = supportMessageCounter();
   }
 }
 
