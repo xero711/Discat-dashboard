@@ -1502,10 +1502,6 @@ body.body--guard.body--status-only .app-shell--guard {
   min-height: 72px;
 }
 
-.support-other-field--hidden {
-  display: none;
-}
-
 .support-success {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

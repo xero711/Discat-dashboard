@@ -4864,10 +4864,7 @@ function renderSupportInquiryDialog() {
                 disabled: support.sending,
               })).join("")}
             </div>
-            <label class="field support-other-field ${supportRequiresOther() ? "" : "support-other-field--hidden"}">
-              <span>その他の要件</span>
-              <input type="text" maxlength="120" value="${escapeAttribute(support.requirementOther)}" data-support-field="requirement_other" placeholder="要件を入力" ${supportRequiresOther() ? "required" : ""} ${!supportRequiresOther() || support.sending ? "disabled" : ""} />
-            </label>`,
+            ${supportRequiresOther() ? renderSupportOtherRequirementField(support) : ""}`,
           )}
           ${renderSupportQuestion(
             "03",
@@ -4911,6 +4908,15 @@ function renderSupportQuestion(number, title, body) {
         ${body}
       </div>
     </section>
+  `;
+}
+
+function renderSupportOtherRequirementField(support) {
+  return `
+    <label class="field support-other-field">
+      <span>その他の要件</span>
+      <input type="text" maxlength="120" value="${escapeAttribute(support.requirementOther)}" data-support-field="requirement_other" placeholder="要件を入力" required ${support.sending ? "disabled" : ""} />
+    </label>
   `;
 }
 
