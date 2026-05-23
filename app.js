@@ -92,6 +92,43 @@ const ACTIVITY_PERIODS = [
   { id: "weekly", label: "週" },
   { id: "monthly", label: "月" },
 ];
+const BUMP_RANK_RESET_INTERVALS = [
+  { id: "none", label: "リセットしない" },
+  { id: "daily", label: "毎日" },
+  { id: "weekly", label: "毎週" },
+  { id: "monthly", label: "毎月" },
+];
+const BUMP_RANKS = [
+  "ビギナー1",
+  "ビギナー2",
+  "ビギナー3",
+  "ブロンズ1",
+  "ブロンズ2",
+  "ブロンズ3",
+  "シルバー1",
+  "シルバー2",
+  "シルバー3",
+  "ゴールド1",
+  "ゴールド2",
+  "ゴールド3",
+  "プラチナム1",
+  "プラチナム2",
+  "プラチナム3",
+  "ダイヤモンド1",
+  "ダイヤモンド2",
+  "ダイヤモンド3",
+  "マスター1",
+  "マスター2",
+  "マスター3",
+  "キング1",
+  "キング2",
+  "キング3",
+  "バンプゴッド1",
+  "バンプゴッド2",
+  "バンプゴッド3",
+  "レジェンド",
+];
+const BUMP_RANK_STEP_SIZE = 10;
 const WELCOME_MESSAGE_TOKEN_GROUPS = [
   {
     title: "メンバー",
@@ -165,6 +202,15 @@ const SETTINGS_PAGES = [
     description: "参加通知とロール",
     help: "案内メッセージにリアクションしたユーザーへ、VC参加時の通知ロールで知らせます。",
     icon: "bell",
+    view: "features",
+  },
+  {
+    id: "bump-rank",
+    label: "Bumpランク",
+    eyebrow: "掲示板",
+    description: "DISBOARD通知とランキング",
+    help: "DISBOARDの/bump成功を検知し、2時間後の再実行通知、ランク、定期ランキング送信を管理します。",
+    icon: "activity",
     view: "features",
   },
   {
@@ -1773,6 +1819,7 @@ function normalizeFeatureSettings(featureSettings) {
       ? featureSettings.sticky_messages
       : [],
     vc_notification: normalizeVcNotificationSettings(featureSettings?.vc_notification),
+    bump_rank: normalizeBumpRankSettings(featureSettings?.bump_rank),
   };
 }
 
@@ -1841,6 +1888,25 @@ function normalizeVcNotificationSettings(settings) {
   };
 }
 
+function normalizeBumpRankSettings(settings) {
+  return {
+    channel_id: normalizeNullableString(settings?.channel_id) ?? "",
+    role_id: normalizeNullableString(settings?.role_id) ?? "",
+    reset_interval: normalizeBumpRankResetInterval(settings?.reset_interval),
+    ranking_channel_id: normalizeNullableString(settings?.ranking_channel_id) ?? "",
+    total_bumps: Math.max(0, Math.trunc(Number(settings?.total_bumps) || 0)),
+    next_bump_at: normalizeNullableString(settings?.next_bump_at),
+    last_bump_at: normalizeNullableString(settings?.last_bump_at),
+    next_reset_at: normalizeNullableString(settings?.next_reset_at),
+    last_reset_at: normalizeNullableString(settings?.last_reset_at),
+  };
+}
+
+function normalizeBumpRankResetInterval(value) {
+  const interval = String(value ?? "none");
+  return BUMP_RANK_RESET_INTERVALS.some((item) => item.id === interval) ? interval : "none";
+}
+
 function cloneState(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -1906,6 +1972,7 @@ function comparableFeatureSettings(featureSettings) {
     return null;
   }
   const vcNotification = comparableVcNotificationSettings(featureSettings.vc_notification);
+  const bumpRank = comparableBumpRankSettings(featureSettings.bump_rank);
   return {
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
     global_chat_channel_id: normalizeNullableString(featureSettings.global_chat_channel_id),
@@ -1914,6 +1981,7 @@ function comparableFeatureSettings(featureSettings) {
       content: rule.content,
     })),
     vc_notification: vcNotification,
+    bump_rank: bumpRank,
   };
 }
 
@@ -2173,6 +2241,7 @@ async function saveFeatureSettings() {
         }))
         .filter((rule) => rule.channel_id && rule.content),
       vc_notification: buildVcNotificationPatch(state.featureSettings.vc_notification),
+      bump_rank: buildBumpRankPatch(state.featureSettings.bump_rank),
     });
     if (requestId === state.requestIds.save) {
       rememberSavedFeatureSettings(updated);
@@ -2217,6 +2286,25 @@ function buildVcNotificationPatch(settings) {
     reaction_message_id: normalized.reaction_message_id || null,
     emoji: normalized.emoji,
     role_id: normalized.role_id || null,
+  };
+}
+
+function buildBumpRankPatch(settings) {
+  const normalized = normalizeBumpRankSettings(settings);
+  const hasAnyValue = Boolean(
+    normalized.channel_id
+      || normalized.role_id
+      || normalized.ranking_channel_id
+      || normalized.reset_interval !== "none",
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    channel_id: normalized.channel_id || null,
+    role_id: normalized.role_id || null,
+    reset_interval: normalized.reset_interval,
+    ranking_channel_id: normalized.ranking_channel_id || null,
   };
 }
 
@@ -4990,6 +5078,25 @@ function supportProgress() {
   };
 }
 
+function comparableBumpRankSettings(settings) {
+  const normalized = normalizeBumpRankSettings(settings);
+  const hasAnyValue = Boolean(
+    normalized.channel_id
+      || normalized.role_id
+      || normalized.ranking_channel_id
+      || normalized.reset_interval !== "none",
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    channel_id: normalizeNullableString(normalized.channel_id),
+    role_id: normalizeNullableString(normalized.role_id),
+    reset_interval: normalized.reset_interval,
+    ranking_channel_id: normalizeNullableString(normalized.ranking_channel_id),
+  };
+}
+
 function supportMessageCounter() {
   return `${state.support.message.length}/${SUPPORT_MESSAGE_MAX_LENGTH}`;
 }
@@ -5617,6 +5724,7 @@ function renderFeatureSettingsForm() {
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
+    "bump-rank": () => renderBumpRankSettings(textChannels, roles),
   }[page.id]?.() ?? renderGlobalChatSettings(textChannels);
 
   return `
@@ -5843,6 +5951,80 @@ function renderVcNotificationSettings(textChannels, roles) {
   `;
 }
 
+function renderBumpRankSettings(textChannels, roles) {
+  const settings = normalizeBumpRankSettings(state.featureSettings.bump_rank);
+  const selectedChannel = textChannels.find((channel) => channel.id === settings.channel_id);
+  const selectedRankingChannel = textChannels.find((channel) => channel.id === settings.ranking_channel_id);
+  const selectedRole = roles.find((role) => role.id === settings.role_id);
+  const enabled = Boolean(settings.channel_id && settings.role_id);
+  const resetEnabled = settings.reset_interval !== "none";
+  return `
+    <section class="feature-card" aria-label="Bumpランク">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("activity")}<h2>Bumpランク</h2>
+        </div>
+        <span class="feature-status ${enabled ? "feature-status--on" : ""}">
+          ${enabled ? "有効" : "未設定"}
+        </span>
+      </div>
+      <div class="settings-grid">
+        <label class="field">
+          <span>再通知チャンネル</span>
+          <select data-bump-rank-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>メンションロール</span>
+          <select data-bump-rank-field="role_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === settings.role_id ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>ランクリセット周期</span>
+          <select data-bump-rank-field="reset_interval">
+            ${BUMP_RANK_RESET_INTERVALS.map((interval) => `<option value="${escapeAttribute(interval.id)}" ${interval.id === settings.reset_interval ? "selected" : ""}>${escapeHtml(interval.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>ランキング送信チャンネル</span>
+          <select data-bump-rank-field="ranking_channel_id" ${!resetEnabled || (selectedGuildCanConfigure() && !state.ttsOptions) ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.ranking_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="field feature-summary">
+          <span>現在ランク</span>
+          <strong>${escapeHtml(formatBumpRank(settings.total_bumps))} / ${escapeHtml(`${settings.total_bumps} bump`)}</strong>
+        </div>
+        <div class="field feature-summary">
+          <span>現在の設定</span>
+          <strong>${formatBumpRankSummary(selectedChannel, selectedRole, selectedRankingChannel, settings)}</strong>
+        </div>
+        <div class="field feature-summary">
+          <span>次回Bump</span>
+          <strong>${escapeHtml(settings.next_bump_at ? formatDateTime(settings.next_bump_at) : "未検知")}</strong>
+        </div>
+        <div class="field feature-summary">
+          <span>次回リセット</span>
+          <strong>${escapeHtml(resetEnabled && settings.next_reset_at ? formatDateTime(settings.next_reset_at) : resetEnabled ? "保存後にBotが設定" : "無効")}</strong>
+        </div>
+      </div>
+      <div class="settings-panel__footer">
+        ${icon("info")}<span>DISBOARDの/bump成功を検知すると2時間後に再通知し、リセット時に期間内ランキングを送信します。</span>
+      </div>
+      <div class="feature-card__actions">
+        <button class="icon-button icon-button--ghost" type="button" data-action="clear-bump-rank">
+          ${icon("trash")}<span>Bumpランクを解除</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
 function renderHostAdminPanel() {
   const status = state.hostStatus;
   const bot = status?.bot_status ?? null;
@@ -5970,6 +6152,30 @@ function formatVcNotificationSummary(reactionChannel, notificationChannel, role,
     parts.push(settings.emoji);
   }
   return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
+}
+
+function formatBumpRankSummary(channel, role, rankingChannel, settings) {
+  const parts = [];
+  if (channel) {
+    parts.push(`再通知 #${channel.name}`);
+  }
+  if (role) {
+    parts.push(`@${role.name}`);
+  }
+  if (settings.reset_interval !== "none") {
+    const resetLabel = BUMP_RANK_RESET_INTERVALS.find((item) => item.id === settings.reset_interval)?.label;
+    parts.push(`リセット ${resetLabel ?? settings.reset_interval}`);
+  }
+  if (rankingChannel) {
+    parts.push(`ランキング #${rankingChannel.name}`);
+  }
+  return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
+}
+
+function formatBumpRank(totalBumps) {
+  const count = Math.max(0, Math.trunc(Number(totalBumps) || 0));
+  const index = Math.min(Math.floor(count / BUMP_RANK_STEP_SIZE), BUMP_RANKS.length - 1);
+  return BUMP_RANKS[index];
 }
 
 function renderHostOverview(status, bot) {
@@ -6606,6 +6812,10 @@ function handleClick(event) {
       state.featureSettings.vc_notification = normalizeVcNotificationSettings(null);
       updateDirtyState("features");
       render();
+    } else if (action === "clear-bump-rank") {
+      state.featureSettings.bump_rank = normalizeBumpRankSettings(null);
+      updateDirtyState("features");
+      render();
     }
     return;
   }
@@ -6684,6 +6894,8 @@ function handleChange(event) {
     updateStickyMessageField(target);
   } else if (target.dataset.vcNotificationField) {
     updateVcNotificationField(target);
+  } else if (target.dataset.bumpRankField) {
+    updateBumpRankField(target);
   } else if ("playlistFileInput" in target.dataset) {
     const file = target.files?.[0] ?? null;
     target.value = "";
@@ -6736,6 +6948,11 @@ function handleInput(event) {
 
   if (target.dataset.vcNotificationField) {
     updateVcNotificationField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.bumpRankField) {
+    updateBumpRankField(target, { renderAfter: false });
     return;
   }
 
@@ -6988,6 +7205,26 @@ function updateVcNotificationField(target, options = { renderAfter: true }) {
   state.featureSettings.vc_notification = {
     ...normalizeVcNotificationSettings(state.featureSettings.vc_notification),
     [field]: target.value,
+  };
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateBumpRankField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const field = target.dataset.bumpRankField;
+  const current = normalizeBumpRankSettings(state.featureSettings.bump_rank);
+  const value = field === "reset_interval"
+    ? normalizeBumpRankResetInterval(target.value)
+    : target.value;
+  state.featureSettings.bump_rank = {
+    ...current,
+    [field]: value,
+    ...(field === "reset_interval" && value === "none" ? { ranking_channel_id: "" } : {}),
   };
   updateDirtyState("features");
   if (options.renderAfter) {
