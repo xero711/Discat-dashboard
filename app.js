@@ -19,7 +19,7 @@ const REQUEST_TIMEOUT_MS = 60000;
 const SERVICE_STATUS_TIMEOUT_MS = 10000;
 const SERVICE_STATUS_REFRESH_INTERVAL_MS = 30000;
 const GUARD_STATUS_REFRESH_INTERVAL_MS = 10000;
-const GUILD_OPTIONS_REFRESH_INTERVAL_MS = 5000;
+const GUILD_OPTIONS_REFRESH_INTERVAL_MS = 60000;
 const HOST_REFRESH_INTERVAL_MS = 5000;
 const PLAYLIST_PREVIEW_DURATION_SECONDS = 15;
 const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -1432,6 +1432,7 @@ async function refreshSelectedGuildOptions(options = {}) {
       state.activeProduct !== "one" ||
       !state.user ||
       state.loading ||
+      state.saving ||
       (view !== "tts" && view !== "features")
   ) {
     return;
@@ -1926,6 +1927,7 @@ function shouldAutoRefreshGuildOptions() {
       state.user &&
       state.selectedGuildId &&
       !state.loading &&
+      !state.saving &&
       !document.hidden &&
       (view === "tts" || view === "features"),
   );
@@ -2488,18 +2490,7 @@ async function saveFeatureSettings() {
 
   let saved = false;
   try {
-    const updated = await api.updateFeatureSettings(state.selectedGuildId, {
-      welcome_message: buildWelcomeMessagePatch(state.featureSettings.welcome_message),
-      global_chat_channel_id: normalizeNullableString(state.featureSettings.global_chat_channel_id),
-      sticky_messages: state.featureSettings.sticky_messages
-        .map((rule) => ({
-          channel_id: rule.channel_id,
-          content: rule.content.trim(),
-        }))
-        .filter((rule) => rule.channel_id && rule.content),
-      vc_notification: buildVcNotificationPatch(state.featureSettings.vc_notification),
-      bump_rank: buildBumpRankPatch(state.featureSettings.bump_rank),
-    });
+    const updated = await api.updateFeatureSettings(state.selectedGuildId, buildFeatureSettingsPatch());
     if (requestId === state.requestIds.save) {
       rememberSavedFeatureSettings(updated);
       clearPendingNavigation();
@@ -2516,6 +2507,41 @@ async function saveFeatureSettings() {
     }
   }
   return saved;
+}
+
+function buildFeatureSettingsPatch() {
+  const pageId = activeSettingsPage().id;
+  if (pageId === "welcome-message") {
+    return {
+      welcome_message: buildWelcomeMessagePatch(state.featureSettings.welcome_message),
+    };
+  }
+  if (pageId === "global-chat") {
+    return {
+      global_chat_channel_id: normalizeNullableString(state.featureSettings.global_chat_channel_id),
+    };
+  }
+  if (pageId === "sticky-message") {
+    return {
+      sticky_messages: state.featureSettings.sticky_messages
+        .map((rule) => ({
+          channel_id: rule.channel_id,
+          content: rule.content.trim(),
+        }))
+        .filter((rule) => rule.channel_id && rule.content),
+    };
+  }
+  if (pageId === "vc-notification") {
+    return {
+      vc_notification: buildVcNotificationPatch(state.featureSettings.vc_notification),
+    };
+  }
+  if (pageId === "bump-rank") {
+    return {
+      bump_rank: buildBumpRankPatch(state.featureSettings.bump_rank),
+    };
+  }
+  return {};
 }
 
 function buildWelcomeMessagePatch(settings) {
@@ -5602,7 +5628,7 @@ function renderPlaylistTrack(track, options = {}) {
           <span>${escapeHtml(sourceLabel)} / プレビュー${escapeHtml(formatDuration(previewDuration))} / ${escapeHtml(formatDateTime(track.created_at))}</span>
         </div>
         <div class="playlist-player" data-playlist-player data-track-id="${escapedTrackId}" data-track-title="${escapedTitle}" data-track-duration="${escapeAttribute(previewDuration)}">
-          <audio class="playlist-player__audio" preload="${readonly ? "none" : "auto"}" src="${escapeAttribute(previewUrl)}" data-track-audio data-track-id="${escapedTrackId}"></audio>
+          <audio class="playlist-player__audio" preload="none" data-preview-src="${escapeAttribute(previewUrl)}" data-track-audio data-track-id="${escapedTrackId}"></audio>
           <button class="playlist-player__toggle" type="button" data-action="playlist-toggle-play" data-track-id="${escapedTrackId}" aria-label="${escapedTitle}を再生">
             ${icon("play")}
           </button>
@@ -5681,6 +5707,7 @@ function togglePlaylistTrackPlayback(trackId) {
   }
 
   pauseOtherPlaylistAudio(audio);
+  ensurePlaylistAudioSource(audio);
   if (audio.ended) {
     audio.currentTime = 0;
   }
@@ -5707,6 +5734,13 @@ function togglePlaylistTrackPlayback(trackId) {
         render();
       });
   }
+}
+
+function ensurePlaylistAudioSource(audio) {
+  if (audio.getAttribute("src") || !audio.dataset.previewSrc) {
+    return;
+  }
+  audio.src = audio.dataset.previewSrc;
 }
 
 function findPlaylistAudio(trackId) {
@@ -5737,6 +5771,7 @@ function handlePlaylistSeekInput(input) {
     return;
   }
 
+  ensurePlaylistAudioSource(audio);
   const max = Number(input.max) || 1000;
   const ratio = clampNumber(Number(input.value) / max, 0, 1);
   try {
