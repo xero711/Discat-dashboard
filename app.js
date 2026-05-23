@@ -37,6 +37,7 @@ const TTS_TEXT_LENGTH_MIN = 1;
 const TTS_TEXT_LENGTH_MAX = 100;
 const HOST_CONTROL_ADMIN_DISCORD_USER_ID = "907254481371144243";
 const SUPPORT_MESSAGE_MAX_LENGTH = 1900;
+const VC_NOTIFICATION_REACTION_EMOJI = "🔔";
 
 const SUPPORT_PRODUCTS = [
   { id: "one", label: "Discat One" },
@@ -56,26 +57,14 @@ const TTS_ENGINES = [
   {
     value: "voicevox",
     label: "VOICEVOX",
-    badge: "RX7600推奨",
-    accelerator: "DirectML GPU",
-    detail: "声数最多で高速。通常運用向け。",
-    optionDetail: "RX7600推奨 / DirectML GPU / 声数最多",
   },
   {
     value: "aivis",
     label: "AivisSpeech",
-    badge: "高品質",
-    accelerator: "DirectML GPU",
-    detail: "高品質な読み上げ向け。追加モデルに対応。",
-    optionDetail: "高品質 / DirectML GPU",
   },
   {
     value: "coeiroink",
     label: "COEIROINK",
-    badge: "追加音声",
-    accelerator: "DirectML",
-    detail: "追加音声用。CUDAではなくDirectMLで起動。",
-    optionDetail: "DirectML / 追加音声",
   },
 ];
 
@@ -2159,7 +2148,7 @@ function normalizeVcNotificationSettings(settings) {
     reaction_channel_id: normalizeNullableString(settings?.reaction_channel_id) ?? "",
     notification_channel_id: normalizeNullableString(settings?.notification_channel_id) ?? "",
     reaction_message_id: normalizeNullableString(settings?.reaction_message_id) ?? "",
-    emoji: String(settings?.emoji ?? "").trim(),
+    emoji: VC_NOTIFICATION_REACTION_EMOJI,
     role_id: normalizeNullableString(settings?.role_id) ?? "",
   };
 }
@@ -2275,7 +2264,12 @@ function comparableWelcomeMessageSettings(settings) {
 
 function comparableVcNotificationSettings(settings) {
   const normalized = normalizeVcNotificationSettings(settings);
-  const hasAnyValue = Object.values(normalized).some((value) => String(value).trim());
+  const hasAnyValue = Boolean(
+    normalized.reaction_channel_id
+      || normalized.notification_channel_id
+      || normalized.reaction_message_id
+      || normalized.role_id,
+  );
   if (!hasAnyValue) {
     return null;
   }
@@ -2552,7 +2546,12 @@ function buildWelcomeMessagePatch(settings) {
 
 function buildVcNotificationPatch(settings) {
   const normalized = normalizeVcNotificationSettings(settings);
-  const hasAnyValue = Object.values(normalized).some((value) => String(value).trim());
+  const hasAnyValue = Boolean(
+    normalized.reaction_channel_id
+      || normalized.notification_channel_id
+      || normalized.reaction_message_id
+      || normalized.role_id,
+  );
   if (!hasAnyValue) {
     return null;
   }
@@ -5806,7 +5805,6 @@ function renderTtsSettingsForm() {
   const voices = state.ttsOptions?.voices?.[settings.tts_engine] ?? [];
   const availableVoices = voices.filter((voice) => voice.available !== false);
   const unavailableVoices = voices.filter((voice) => voice.available === false);
-  const engine = ttsEngineMeta(settings.tts_engine);
   const voiceAvailabilityLabel = !state.ttsOptions
     ? "取得中"
     : voices.length === 0
@@ -5823,21 +5821,9 @@ function renderTtsSettingsForm() {
         <label class="field">
           <span>デフォルト読み上げエンジン</span>
           <select data-settings-field="tts_engine">
-            ${TTS_ENGINES.map((item) => `<option value="${escapeAttribute(item.value)}" ${item.value === settings.tts_engine ? "selected" : ""}>${escapeHtml(ttsEngineOptionLabel(item))}</option>`).join("")}
+            ${TTS_ENGINES.map((item) => `<option value="${escapeAttribute(item.value)}" ${item.value === settings.tts_engine ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
           </select>
         </label>
-
-        <div class="tts-engine-status">
-          <div class="tts-engine-status__summary">
-            <strong>${escapeHtml(engine.label)}</strong>
-            <span>${escapeHtml(engine.detail)}</span>
-          </div>
-          <div class="tts-engine-status__chips">
-            <span class="tts-engine-status__chip tts-engine-status__chip--accent">${escapeHtml(engine.badge)}</span>
-            <span class="tts-engine-status__chip">${icon("activity")}<span>${escapeHtml(engine.accelerator)}</span></span>
-            <span class="tts-engine-status__chip">${icon("volume")}<span>${escapeHtml(voiceAvailabilityLabel)}</span></span>
-          </div>
-        </div>
 
         <label class="field">
           <div class="field__header">
@@ -5880,14 +5866,6 @@ function renderTtsSettingsForm() {
       }
     </section>
   `;
-}
-
-function ttsEngineMeta(engineKey) {
-  return TTS_ENGINES.find((engine) => engine.value === engineKey) ?? TTS_ENGINES[0];
-}
-
-function ttsEngineOptionLabel(engine) {
-  return `${engine.label} - ${engine.optionDetail}`;
 }
 
 function renderSettingsHeader(iconName, title, view, dirty) {
@@ -6196,7 +6174,7 @@ function renderVcNotificationSettings(textChannels, roles) {
   const selectedReactionChannel = textChannels.find((channel) => channel.id === settings.reaction_channel_id);
   const selectedNotificationChannel = textChannels.find((channel) => channel.id === settings.notification_channel_id);
   const selectedRole = roles.find((role) => role.id === settings.role_id);
-  const enabled = Boolean(settings.reaction_channel_id && settings.notification_channel_id && settings.emoji && settings.role_id);
+  const enabled = Boolean(settings.reaction_channel_id && settings.notification_channel_id && settings.role_id);
   return `
     <section class="feature-card" aria-label="VC通知">
       <div class="feature-card__header">
@@ -6231,11 +6209,7 @@ function renderVcNotificationSettings(textChannels, roles) {
         </label>
         <label class="field">
           <span>リアクション絵文字</span>
-          <input type="text" maxlength="80" value="${escapeAttribute(settings.emoji)}" data-vc-notification-field="emoji" placeholder="例: 🔔" />
-        </label>
-        <label class="field">
-          <span>案内メッセージID</span>
-          <input type="text" inputmode="numeric" maxlength="32" value="${escapeAttribute(settings.reaction_message_id)}" data-vc-notification-field="reaction_message_id" placeholder="空欄なら保存時に作成" />
+          <input type="text" value="${escapeAttribute(VC_NOTIFICATION_REACTION_EMOJI)}" readonly aria-readonly="true" />
         </label>
         <div class="field feature-summary">
           <span>現在の設定</span>
@@ -6509,8 +6483,8 @@ function formatVcNotificationSummary(reactionChannel, notificationChannel, role,
   if (role) {
     parts.push(`@${role.name}`);
   }
-  if (settings.emoji) {
-    parts.push(settings.emoji);
+  if (parts.length) {
+    parts.push(VC_NOTIFICATION_REACTION_EMOJI);
   }
   return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
 }
@@ -7566,6 +7540,9 @@ function updateVcNotificationField(target, options = { renderAfter: true }) {
     return;
   }
   const field = target.dataset.vcNotificationField;
+  if (field === "emoji") {
+    return;
+  }
   state.featureSettings.vc_notification = {
     ...normalizeVcNotificationSettings(state.featureSettings.vc_notification),
     [field]: target.value,
