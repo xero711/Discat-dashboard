@@ -76,49 +76,27 @@ const USER_PAGE = {
   icon: "user",
   view: "user",
 };
+const USER_PANEL_TABS = [
+  { id: "playlist", label: "プレイリスト", icon: "music" },
+  { id: "activity", label: "アクティビティ", icon: "activity" },
+];
 const SERVER_DEFAULT_PAGE = "welcome-message";
 const ACTIVITY_PERIODS = [
-  { id: "daily", label: "日" },
-  { id: "weekly", label: "週" },
-  { id: "monthly", label: "月" },
+  { id: "daily", label: "日別", summary: "直近7日" },
+  { id: "weekly", label: "週別", summary: "直近8週" },
+  { id: "monthly", label: "月別", summary: "直近6か月" },
 ];
+const ACTIVITY_POINT_LIMITS = {
+  daily: 7,
+  weekly: 8,
+  monthly: 6,
+};
 const BUMP_RANK_RESET_INTERVALS = [
   { id: "none", label: "リセットしない" },
   { id: "daily", label: "毎日" },
   { id: "weekly", label: "毎週" },
   { id: "monthly", label: "毎月" },
 ];
-const BUMP_RANKS = [
-  "ビギナー1",
-  "ビギナー2",
-  "ビギナー3",
-  "ブロンズ1",
-  "ブロンズ2",
-  "ブロンズ3",
-  "シルバー1",
-  "シルバー2",
-  "シルバー3",
-  "ゴールド1",
-  "ゴールド2",
-  "ゴールド3",
-  "プラチナム1",
-  "プラチナム2",
-  "プラチナム3",
-  "ダイヤモンド1",
-  "ダイヤモンド2",
-  "ダイヤモンド3",
-  "マスター1",
-  "マスター2",
-  "マスター3",
-  "キング1",
-  "キング2",
-  "キング3",
-  "バンプゴッド1",
-  "バンプゴッド2",
-  "バンプゴッド3",
-  "レジェンド",
-];
-const BUMP_RANK_STEP_SIZE = 10;
 const WELCOME_MESSAGE_TOKEN_GROUPS = [
   {
     title: "メンバー",
@@ -539,6 +517,7 @@ const state = {
   userActivityLoading: false,
   userActivityError: null,
   activeActivityPeriod: "daily",
+  activeUserPanelTab: "playlist",
   support: createDefaultSupportState(),
   security: {
     loading: true,
@@ -2100,14 +2079,22 @@ function normalizeUserActivity(activity) {
   return {
     user_id: String(activity?.user_id ?? state.user?.discord_user_id ?? ""),
     generated_at: activity?.generated_at ?? null,
-    daily: normalizeUserActivityPoints(activity?.daily),
-    weekly: normalizeUserActivityPoints(activity?.weekly),
-    monthly: normalizeUserActivityPoints(activity?.monthly),
+    daily: normalizeUserActivityPoints(activity?.daily).slice(-ACTIVITY_POINT_LIMITS.daily),
+    weekly: normalizeUserActivityPoints(activity?.weekly).slice(-ACTIVITY_POINT_LIMITS.weekly),
+    monthly: normalizeUserActivityPoints(activity?.monthly).slice(-ACTIVITY_POINT_LIMITS.monthly),
   };
 }
 
 function normalizeUserActivityPoints(points) {
-  return Array.isArray(points) ? points.map(normalizeUserActivityPoint) : [];
+  return Array.isArray(points)
+    ? points.map(normalizeUserActivityPoint).sort(compareUserActivityPoints)
+    : [];
+}
+
+function compareUserActivityPoints(left, right) {
+  const leftKey = left.start_date || left.label;
+  const rightKey = right.start_date || right.label;
+  return leftKey.localeCompare(rightKey);
 }
 
 function normalizeUserActivityPoint(point) {
@@ -2770,6 +2757,7 @@ function resetSessionState() {
   state.userActivityLoading = false;
   state.userActivityError = null;
   state.activeActivityPeriod = "daily";
+  state.activeUserPanelTab = "playlist";
   state.support = createDefaultSupportState();
   resetDirtyViews();
   render();
@@ -5195,15 +5183,13 @@ function renderGuildIcon(guild) {
 
 function renderUserPage() {
   const playlist = state.playlist ?? normalizePlaylist(null);
+  const activePanelTab = normalizedUserPanelTab();
   return `
     <section class="settings-panel user-page" aria-label="ユーザーページ">
       <div class="settings-panel__header">
         <div class="panel-heading">
           ${icon("user")}<h2>ユーザーページ</h2>
         </div>
-        <button class="icon-button icon-button--ghost" type="button" data-action="playlist-refresh" ${state.playlistLoading ? "disabled" : ""}>
-          ${icon("refresh")}<span>${state.playlistLoading ? "更新中" : "プレイリスト更新"}</span>
-        </button>
       </div>
       <div class="user-page__grid">
         <section class="feature-card user-profile-card">
@@ -5226,9 +5212,46 @@ function renderUserPage() {
           </div>
         </section>
       </div>
-      ${renderPlaylistPanel(playlist)}
-      ${renderUserActivityPanel()}
+      ${renderUserPanelTabs(activePanelTab, playlist)}
+      <div class="user-page__tab-panel" role="tabpanel" id="user-panel-${escapeAttribute(activePanelTab)}" aria-labelledby="user-panel-tab-${escapeAttribute(activePanelTab)}">
+        ${activePanelTab === "activity" ? renderUserActivityPanel() : renderPlaylistPanel(playlist)}
+      </div>
     </section>
+  `;
+}
+
+function normalizedUserPanelTab() {
+  return USER_PANEL_TABS.some((tab) => tab.id === state.activeUserPanelTab)
+    ? state.activeUserPanelTab
+    : "playlist";
+}
+
+function renderUserPanelTabs(activePanelTab, playlist) {
+  const tracks = playlist.tracks ?? [];
+  const period = normalizedActivityPeriod();
+  const activitySummary = activityPeriodMeta(period).summary;
+  return `
+    <div class="user-panel-tabs" role="tablist" aria-label="ユーザーページ表示">
+      ${USER_PANEL_TABS.map((tab) => {
+        const selected = activePanelTab === tab.id;
+        const meta = tab.id === "playlist" ? `${tracks.length}曲` : activitySummary;
+        return `
+          <button
+            id="user-panel-tab-${escapeAttribute(tab.id)}"
+            class="user-panel-tab ${selected ? "user-panel-tab--active" : ""}"
+            type="button"
+            role="tab"
+            aria-selected="${selected}"
+            aria-controls="user-panel-${escapeAttribute(tab.id)}"
+            data-user-panel-tab="${escapeAttribute(tab.id)}"
+          >
+            ${icon(tab.icon)}
+            <span>${escapeHtml(tab.label)}</span>
+            <strong>${escapeHtml(meta)}</strong>
+          </button>
+        `;
+      }).join("")}
+    </div>
   `;
 }
 
@@ -5394,9 +5417,8 @@ function supportMessageCounter() {
 
 function renderUserActivityPanel() {
   const activity = normalizeUserActivity(state.userActivity);
-  const period = ACTIVITY_PERIODS.some((item) => item.id === state.activeActivityPeriod)
-    ? state.activeActivityPeriod
-    : "daily";
+  const period = normalizedActivityPeriod();
+  const periodMeta = activityPeriodMeta(period);
   const points = activity[period] ?? [];
   const totals = sumActivityPoints(points);
   return `
@@ -5416,6 +5438,10 @@ function renderUserActivityPanel() {
           </button>
         `).join("")}
       </div>
+      <div class="activity-range-summary">
+        <strong>${escapeHtml(periodMeta.summary)}</strong>
+        <span>${escapeHtml(activityRangeLabel(points))}</span>
+      </div>
       <div class="activity-metric-grid">
         ${renderActivityMetricCard("VC接続時間", formatActivityDuration(totals.vc_seconds), "vc_seconds", points, "activity-line--vc")}
         ${renderActivityMetricCard("送信メッセージ数", formatCompactNumber(totals.message_count), "message_count", points, "activity-line--messages")}
@@ -5423,6 +5449,27 @@ function renderUserActivityPanel() {
       </div>
     </section>
   `;
+}
+
+function normalizedActivityPeriod() {
+  return ACTIVITY_PERIODS.some((item) => item.id === state.activeActivityPeriod)
+    ? state.activeActivityPeriod
+    : "daily";
+}
+
+function activityPeriodMeta(period) {
+  return ACTIVITY_PERIODS.find((item) => item.id === period) ?? ACTIVITY_PERIODS[0];
+}
+
+function activityRangeLabel(points) {
+  if (!points.length) {
+    return "記録なし";
+  }
+  const first = points[0];
+  const latest = points.at(-1);
+  const firstLabel = first.label || first.start_date || "--";
+  const latestLabel = latest?.label || latest?.end_date || "--";
+  return firstLabel === latestLabel ? latestLabel : `${firstLabel} - ${latestLabel}`;
 }
 
 function renderActivityMetricCard(title, value, metric, points, lineClass) {
@@ -5456,12 +5503,18 @@ function renderPlaylistPanel(playlist) {
   const tracks = playlist.tracks ?? [];
   return `
     <section class="feature-card playlist-panel" aria-label="プレイリスト">
-      <div class="feature-card__header">
+      <div class="feature-card__header playlist-panel__header">
         <div class="panel-heading">
           ${icon("music")}<h2>プレイリスト</h2>
         </div>
-        <span class="feature-status ${tracks.length ? "feature-status--on" : ""}">${tracks.length}曲</span>
+        <div class="feature-card__actions">
+          <span class="feature-status ${tracks.length ? "feature-status--on" : ""}">${tracks.length}曲</span>
+          <button class="icon-button icon-button--ghost" type="button" data-action="playlist-refresh" ${state.playlistLoading ? "disabled" : ""}>
+            ${icon("refresh")}<span>${state.playlistLoading ? "更新中" : "更新"}</span>
+          </button>
+        </div>
       </div>
+      ${renderPlaylistSpotlight(tracks)}
       <form class="playlist-url-form" data-playlist-url-form>
         <label class="field playlist-url-form__field">
           <span>YouTube URL</span>
@@ -5490,6 +5543,31 @@ function renderPlaylistPanel(playlist) {
         }
       </div>
     </section>
+  `;
+}
+
+function renderPlaylistSpotlight(tracks) {
+  const latestTrack = tracks.at(-1);
+  return `
+    <div class="playlist-spotlight">
+      <div class="playlist-spotlight__record" aria-hidden="true">
+        ${icon("music")}
+      </div>
+      <div class="playlist-spotlight__copy">
+        <span>Discat One Playlist</span>
+        <strong>URLもmp3もまとめて、すぐ再生できる曲リストに</strong>
+        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "YouTube URLかmp3を追加すると、ここに自分の曲が並びます。")}</p>
+        <div class="playlist-spotlight__chips" aria-label="対応している登録方法">
+          <span>${icon("link")}URL登録</span>
+          <span>${icon("upload")}mp3対応</span>
+          <span>${icon("play")}プレビュー</span>
+        </div>
+      </div>
+      <div class="playlist-spotlight__stat">
+        <strong>${escapeHtml(String(tracks.length))}</strong>
+        <span>登録曲</span>
+      </div>
+    </div>
   `;
 }
 
@@ -6207,17 +6285,13 @@ function renderVcNotificationSettings(textChannels, roles) {
             ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === settings.role_id ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
           </select>
         </label>
-        <label class="field">
-          <span>リアクション絵文字</span>
-          <input type="text" value="${escapeAttribute(VC_NOTIFICATION_REACTION_EMOJI)}" readonly aria-readonly="true" />
-        </label>
-        <div class="field feature-summary">
+        <div class="field feature-summary feature-summary--wide">
           <span>現在の設定</span>
           <strong>${formatVcNotificationSummary(selectedReactionChannel, selectedNotificationChannel, selectedRole, settings)}</strong>
         </div>
       </div>
       <div class="settings-panel__footer">
-        ${icon("bell")}<span>メッセージIDが空欄の場合、保存時に案内メッセージを送信してリアクションを付けます。</span>
+        ${icon("bell")}<span>リアクションは${escapeHtml(VC_NOTIFICATION_REACTION_EMOJI)}固定です。案内メッセージが未作成の場合は保存時に自動作成します。</span>
       </div>
       <div class="feature-card__actions">
         <button class="icon-button icon-button--ghost" type="button" data-action="clear-vc-notification">
@@ -6273,21 +6347,13 @@ function renderBumpRankSettings(textChannels, roles) {
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.ranking_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
         </label>
-        <div class="field feature-summary">
-          <span>現在ランク</span>
-          <strong>${escapeHtml(formatBumpRank(settings.total_bumps))} / ${escapeHtml(`${settings.total_bumps} bump`)}</strong>
-        </div>
-        <div class="field feature-summary">
+        <div class="field feature-summary feature-summary--wide bump-rank-summary">
           <span>現在の設定</span>
-          <strong>${formatBumpRankSummary(selectedChannel, selectedRole, selectedRankingChannel, settings)}</strong>
+          ${renderBumpRankSummary(selectedChannel, selectedRole, selectedRankingChannel, settings)}
         </div>
         <div class="field feature-summary">
           <span>次回Bump</span>
           <strong>${escapeHtml(settings.next_bump_at ? formatDateTime(settings.next_bump_at) : "未検知")}</strong>
-        </div>
-        <div class="field feature-summary">
-          <span>次回リセット</span>
-          <strong>${escapeHtml(resetEnabled && settings.next_reset_at ? formatDateTime(settings.next_reset_at) : resetEnabled ? "保存後にBotが設定" : "無効")}</strong>
         </div>
       </div>
       <div class="settings-panel__footer">
@@ -6489,28 +6555,34 @@ function formatVcNotificationSummary(reactionChannel, notificationChannel, role,
   return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
 }
 
-function formatBumpRankSummary(channel, role, rankingChannel, settings) {
-  const parts = [];
+function renderBumpRankSummary(channel, role, rankingChannel, settings) {
+  const rows = [];
   if (channel) {
-    parts.push(`再通知 #${channel.name}`);
+    rows.push(["再通知", `#${channel.name}`]);
   }
   if (role) {
-    parts.push(`@${role.name}`);
+    rows.push(["メンション", `@${role.name}`]);
   }
   if (settings.reset_interval !== "none") {
     const resetLabel = BUMP_RANK_RESET_INTERVALS.find((item) => item.id === settings.reset_interval)?.label;
-    parts.push(`リセット ${resetLabel ?? settings.reset_interval}`);
+    rows.push(["リセット", resetLabel ?? settings.reset_interval]);
   }
   if (rankingChannel) {
-    parts.push(`ランキング #${rankingChannel.name}`);
+    rows.push(["ランキング", `#${rankingChannel.name}`]);
   }
-  return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
-}
-
-function formatBumpRank(totalBumps) {
-  const count = Math.max(0, Math.trunc(Number(totalBumps) || 0));
-  const index = Math.min(Math.floor(count / BUMP_RANK_STEP_SIZE), BUMP_RANKS.length - 1);
-  return BUMP_RANKS[index];
+  if (!rows.length) {
+    return "<strong>未設定</strong>";
+  }
+  return `
+    <div class="bump-rank-summary__list">
+      ${rows.map(([label, value]) => `
+        <div class="bump-rank-summary__item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function renderHostOverview(status, bot) {
@@ -7169,6 +7241,15 @@ function handleClick(event) {
     state.activeActivityPeriod = ACTIVITY_PERIODS.some((period) => period.id === activityPeriodEl.dataset.activityPeriod)
       ? activityPeriodEl.dataset.activityPeriod
       : "daily";
+    render();
+    return;
+  }
+
+  const userPanelTabEl = target.closest("[data-user-panel-tab]");
+  if (userPanelTabEl) {
+    state.activeUserPanelTab = USER_PANEL_TABS.some((tab) => tab.id === userPanelTabEl.dataset.userPanelTab)
+      ? userPanelTabEl.dataset.userPanelTab
+      : "playlist";
     render();
     return;
   }
