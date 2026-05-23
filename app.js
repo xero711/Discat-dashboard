@@ -18,7 +18,8 @@ const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const REQUEST_TIMEOUT_MS = 60000;
 const SERVICE_STATUS_TIMEOUT_MS = 10000;
 const SERVICE_STATUS_REFRESH_INTERVAL_MS = 30000;
-const GUARD_STATUS_REFRESH_INTERVAL_MS = SERVICE_STATUS_REFRESH_INTERVAL_MS;
+const GUARD_STATUS_REFRESH_INTERVAL_MS = 10000;
+const GUILD_OPTIONS_REFRESH_INTERVAL_MS = 5000;
 const HOST_REFRESH_INTERVAL_MS = 5000;
 const PLAYLIST_PREVIEW_DURATION_SECONDS = 15;
 const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -260,21 +261,22 @@ const GUARD_FEATURES = [
   {
     id: "moderation",
     label: "荒らし対策",
-    description: "招待リンク連投、外部リンク、スパム、暴言、下ネタの検知と処罰を設定します。",
-    help: "検知レベル、処罰内容、処罰ログ、検知対象チャンネルを機能ごとに設定します。",
+    description: "連投リンク、招待リンク、連続投稿、絵文字スパム、連続メンション、暴言、下ネタ、NGワードの検知と処罰を設定します。",
+    help: "連投系は検知ペースと処置、暴言/下ネタは処罰と検知しないチャンネル、NGワードは追加語句と処罰を設定します。",
     icon: "shield",
   },
   {
     id: "logging",
     label: "ログ機能",
-    description: "参加、脱退、ロール付与、VC入退室、メッセージ削除・編集のログ送信先を設定します。",
+    description: "参加、BAN、招待、ロール、チャンネル、VC、メッセージなどのログ送信先を設定します。",
     help: "イベントごとに有効化とログを送るチャンネルを設定します。",
     icon: "activity",
   },
 ];
 
 const GUARD_FEATURE_ROWS = [
-  ["不審メッセージ監視", "大量メンション、短時間URL投稿、荒らし兆候を監査ログへ記録します。"],
+  ["連投監視", "リンク、招待リンク、連続投稿、絵文字、メンションのペースに応じて処置します。"],
+  ["NGワード検知", "管理者が追加した語句を含む投稿を検知して処置します。"],
   ["内容保護", "ログに保存する内容は本文を除外し、必要なメタデータだけを扱います。"],
   ["低権限運用", "スラッシュコマンドや通常コマンドを使わない監視専用BOTとして動作します。"],
 ];
@@ -282,7 +284,7 @@ const GUARD_FEATURE_ROWS = [
 const GUARD_SAMPLE_EVENTS = [
   { event_type: "bot_ready", guild: { name: "System" }, actor: { name: "Discat Guard" }, level: "info" },
   { event_type: "guild_joined", guild: { name: "Sample Guild" }, actor: { name: "Discord" }, level: "success" },
-  { event_type: "suspicious_message", guild: { name: "Sample Guild" }, actor: { name: "sample-user" }, level: "warning" },
+  { event_type: "moderation_detected", guild: { name: "Sample Guild" }, actor: { name: "sample-user" }, level: "warning" },
 ];
 
 const GUARD_DUPLICATE_ACTIONS = [
@@ -294,36 +296,55 @@ const GUARD_DUPLICATE_ACTIONS = [
 const GUARD_MODERATION_FEATURES = [
   {
     id: "invite_spam",
-    label: "招待リンク連投",
+    label: "招待リンク検知",
     description: "Discordサーバー招待リンクを一定ペース以上で送ったユーザーを検知します。",
   },
   {
     id: "other_links",
-    label: "外部リンク遮断",
-    description: "Discord招待リンク以外のURL投稿を検知します。",
+    label: "連投リンク検知",
+    description: "Discord招待リンク以外のURLを一定ペース以上で送ったユーザーを検知します。",
   },
   {
     id: "spam",
-    label: "スパム検知",
-    description: "短時間の連投、同じ文面の繰り返し、大量メンションを検知します。",
+    label: "連続投稿検知",
+    description: "短時間に連続投稿したユーザーを検知します。",
+  },
+  {
+    id: "emoji_spam",
+    label: "絵文字スパム検知",
+    description: "短時間に絵文字を大量投稿したユーザーを検知します。",
+  },
+  {
+    id: "mention_spam",
+    label: "連続メンション検知",
+    description: "短時間にメンションを連続投稿したユーザーを検知します。",
   },
   {
     id: "profanity",
-    label: "暴言禁止",
-    description: "攻撃的な言葉や暴言を検知して処罰します。",
+    label: "暴言検知",
+    description: "攻撃的な言葉や暴言を検知します。検知しないチャンネルを追加できます。",
   },
   {
     id: "sexual_language",
-    label: "下ネタ禁止",
-    description: "性的な表現や下ネタを検知して処罰します。",
+    label: "下ネタ検知",
+    description: "性的な表現や下ネタを検知します。検知しないチャンネルを追加できます。",
+  },
+  {
+    id: "ng_words",
+    label: "NGワード検知",
+    description: "追加したNGワードを含むメッセージを検知します。",
   },
 ];
 
 const GUARD_MODERATION_LEVELS = [
-  { id: "low", label: "低" },
+  { id: "low", label: "ゆるめ" },
   { id: "medium", label: "標準" },
-  { id: "high", label: "高" },
+  { id: "high", label: "厳しめ" },
 ];
+
+const GUARD_MODERATION_PACE_FEATURE_IDS = new Set(["invite_spam", "other_links", "spam", "emoji_spam", "mention_spam"]);
+const GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS = new Set(["profanity", "sexual_language"]);
+const GUARD_MODERATION_NG_WORD_FEATURE_IDS = new Set(["ng_words"]);
 
 const GUARD_MODERATION_ACTIONS = [
   { id: "log", label: "ログのみ" },
@@ -336,8 +357,11 @@ const GUARD_MODERATION_DEFAULTS = {
   invite_spam: { enabled: true, level: "medium", action: "kick", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
   other_links: { enabled: true, level: "high", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
   spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  emoji_spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  mention_spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
   profanity: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
   sexual_language: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
+  ng_words: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true, ng_words: [] },
 };
 
 const GUARD_LOGGING_EVENTS = [
@@ -354,10 +378,82 @@ const GUARD_LOGGING_EVENTS = [
     icon: "logout",
   },
   {
+    id: "member_banned",
+    label: "メンバーBAN",
+    description: "メンバーがBANされた時に、対象ユーザー・実行者・理由を送信します。",
+    icon: "alert",
+  },
+  {
+    id: "member_unbanned",
+    label: "BAN解除",
+    description: "メンバーのBANが解除された時に、対象ユーザー・実行者・理由を送信します。",
+    icon: "success",
+  },
+  {
+    id: "invite_created",
+    label: "招待リンク作成",
+    description: "誰かがサーバー招待リンクを作成した時に、作成者・対象チャンネル・期限・使用上限などを送信します。",
+    icon: "link",
+  },
+  {
+    id: "invite_deleted",
+    label: "招待リンク削除",
+    description: "招待リンクが削除された時に、コード・対象チャンネル・実行者候補を送信します。",
+    icon: "trash",
+  },
+  {
     id: "role_added",
     label: "ロール付与",
-    description: "メンバーにロールが付与された時に送信します。",
+    description: "メンバーにロールが付与された時に、ユーザー情報・付与ロール・現在のロール数を送信します。",
     icon: "shield",
+  },
+  {
+    id: "role_created",
+    label: "ロール作成",
+    description: "ロールが作成された時に、ロールID・権限・表示設定を送信します。",
+    icon: "shield",
+  },
+  {
+    id: "role_deleted",
+    label: "ロール削除",
+    description: "ロールが削除された時に、削除前のロール情報と実行者候補を送信します。",
+    icon: "trash",
+  },
+  {
+    id: "role_updated",
+    label: "ロール更新",
+    description: "ロール名、権限、色、表示設定などの変更前後を送信します。",
+    icon: "settings",
+  },
+  {
+    id: "channel_created",
+    label: "チャンネル作成",
+    description: "チャンネルが作成された時に、種類・カテゴリ・位置などを送信します。",
+    icon: "folder",
+  },
+  {
+    id: "channel_deleted",
+    label: "チャンネル削除",
+    description: "チャンネルが削除された時に、削除前の名前・種類・カテゴリなどを送信します。",
+    icon: "trash",
+  },
+  {
+    id: "channel_updated",
+    label: "チャンネル更新",
+    description: "チャンネル名、トピック、低速モードなどの変更前後を送信します。",
+    icon: "settings",
+  },
+  {
+    id: "guild_updated",
+    label: "サーバー更新",
+    description: "サーバー名、所有者、認証レベルなどの変更前後を送信します。",
+    icon: "server",
+  },
+  {
+    id: "webhooks_updated",
+    label: "Webhook更新",
+    description: "チャンネル内のWebhookが作成、削除、更新された可能性がある時に送信します。",
+    icon: "link",
   },
   {
     id: "voice_joined",
@@ -430,6 +526,9 @@ const state = {
   hostLoading: false,
   hostActionRunning: null,
   hostLastUpdatedAt: null,
+  adminPlaylists: [],
+  adminPlaylistsLoading: false,
+  adminPlaylistsError: null,
   serviceStatus: {
     loading: true,
     apiOnline: false,
@@ -464,6 +563,7 @@ const state = {
     widgetId: null,
   },
   activePage: "user",
+  authChecking: Boolean(getAuthToken()),
   loading: false,
   saving: false,
   message: null,
@@ -531,10 +631,12 @@ const state = {
     guildData: 0,
     save: 0,
     host: 0,
+    adminPlaylists: 0,
     serviceStatus: 0,
     playlist: 0,
     activity: 0,
     guard: 0,
+    guildOptions: 0,
   },
 };
 
@@ -542,6 +644,9 @@ const root = document.getElementById("root");
 let hostRefreshTimerId = null;
 let serviceStatusRefreshTimerId = null;
 let guardStatusRefreshTimerId = null;
+let guildOptionsRefreshTimerId = null;
+let guildOptionsRefreshInFlight = false;
+let guildOptionsRenderPending = false;
 let turnstileScriptPromise = null;
 let playlistAnimationFrameId = null;
 let lastPlaylistPointerToggleTrackId = "";
@@ -566,6 +671,7 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   void loadServiceStatus({ silent: true });
+  void refreshSelectedGuildOptions({ silent: true });
   if (shouldAutoRefreshHost()) {
     void loadHostData({ silent: true, keepMessage: true });
   }
@@ -581,9 +687,11 @@ async function boot() {
 
   if (sessionToken) {
     setAuthToken(sessionToken);
+    state.authChecking = true;
     params.delete("session_token");
   }
   if (authError) {
+    state.authChecking = false;
     state.message = AUTH_ERROR_MESSAGES[authError] ?? "Discordログインに失敗しました。";
     if (authError === "security_failed") {
       clearTurnstileProofToken();
@@ -606,6 +714,9 @@ async function boot() {
   if (authError || sessionToken || product || dashboardVersion) {
     const query = params.toString();
     window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }
+  if (!authError) {
+    state.authChecking = Boolean(getAuthToken());
   }
 
   render();
@@ -868,6 +979,10 @@ function stopOneAutoRefresh() {
   if (hostRefreshTimerId) {
     window.clearInterval(hostRefreshTimerId);
     hostRefreshTimerId = null;
+  }
+  if (guildOptionsRefreshTimerId) {
+    window.clearInterval(guildOptionsRefreshTimerId);
+    guildOptionsRefreshTimerId = null;
   }
 }
 
@@ -1149,6 +1264,7 @@ const api = {
     request(`/playlist/tracks/${encodeURIComponent(trackId)}`, {
       method: "DELETE",
     }),
+  adminPlaylists: () => request("/playlist/admin/users"),
   hostStatus: () => request("/host/status"),
   hostLogs: (limit = 20) => request(`/host/actions?limit=${encodeURIComponent(limit)}`),
   hostAction: (action) =>
@@ -1196,6 +1312,7 @@ function dashboardRedirectUrl() {
 async function loadAccount() {
   const requestId = state.requestIds.account + 1;
   state.requestIds.account = requestId;
+  state.authChecking = true;
   state.loading = true;
   state.message = null;
   state.guildDataError = null;
@@ -1207,6 +1324,7 @@ async function loadAccount() {
       return;
     }
     state.user = me;
+    state.authChecking = false;
     state.guilds = guilds;
     state.playlist = normalizePlaylist(playlist);
     state.userActivity = normalizeUserActivity(null);
@@ -1221,7 +1339,7 @@ async function loadAccount() {
       await loadGuildData(state.selectedGuildId);
     }
     if (activeSettingsView() === "host") {
-      await loadHostData({ silent: true });
+      await loadHostAdminData({ silent: true });
     }
     if (activeSettingsView() === "user") {
       void loadUserActivity({ silent: true });
@@ -1234,9 +1352,11 @@ async function loadAccount() {
       resetSessionState();
       return;
     }
+    state.authChecking = false;
     state.message = error instanceof Error ? error.message : "APIに接続できませんでした。";
   } finally {
     if (requestId === state.requestIds.account) {
+      state.authChecking = false;
       state.loading = false;
       render();
     }
@@ -1250,6 +1370,7 @@ async function loadGuardAccountContext(options = {}) {
 
   const requestId = state.requestIds.account + 1;
   state.requestIds.account = requestId;
+  state.authChecking = true;
   if (!options.silent) {
     state.loading = true;
     render();
@@ -1261,6 +1382,7 @@ async function loadGuardAccountContext(options = {}) {
       return;
     }
     state.user = me;
+    state.authChecking = false;
     state.guilds = Array.isArray(guilds) ? guilds : [];
     const currentGuild = state.guilds.find((guild) => guild.id === state.selectedGuildId);
     state.selectedGuildId =
@@ -1278,9 +1400,11 @@ async function loadGuardAccountContext(options = {}) {
       resetSessionState();
       return;
     }
+    state.authChecking = false;
     state.message = error instanceof Error ? error.message : "サーバー一覧を取得できませんでした。";
   } finally {
     if (requestId === state.requestIds.account) {
+      state.authChecking = false;
       if (!options.silent) {
         state.loading = false;
       }
@@ -1315,6 +1439,7 @@ async function loadGuildData(guildId) {
     }
     rememberSavedSettings(settings);
     state.ttsOptions = options;
+    guildOptionsRenderPending = false;
     rememberSavedFeatureSettings(featureSettings);
     render();
   } catch (error) {
@@ -1329,6 +1454,74 @@ async function loadGuildData(guildId) {
       render();
     }
   }
+}
+
+async function refreshSelectedGuildOptions(options = {}) {
+  const guildId = state.selectedGuildId;
+  const view = activeSettingsView();
+  if (
+    !guildId ||
+      state.activeProduct !== "one" ||
+      !state.user ||
+      state.loading ||
+      (view !== "tts" && view !== "features")
+  ) {
+    return;
+  }
+  if (guildOptionsRefreshInFlight) {
+    return;
+  }
+
+  guildOptionsRefreshInFlight = true;
+  const requestId = state.requestIds.guildOptions + 1;
+  state.requestIds.guildOptions = requestId;
+  try {
+    const nextOptions = await api.ttsOptions(guildId);
+    if (
+      requestId !== state.requestIds.guildOptions ||
+        guildId !== state.selectedGuildId ||
+        state.activeProduct !== "one"
+    ) {
+      return;
+    }
+    if (guildOptionsChanged(state.ttsOptions, nextOptions)) {
+      guildOptionsRenderPending = true;
+    }
+    state.ttsOptions = nextOptions;
+    if (
+      guildOptionsRenderPending &&
+        options.renderAfter !== false &&
+        !shouldDeferGuildOptionsRender()
+    ) {
+      guildOptionsRenderPending = false;
+      render();
+    }
+  } catch {
+    // Keep the current options; regular status refresh handles visible errors.
+  } finally {
+    guildOptionsRefreshInFlight = false;
+  }
+}
+
+function guildOptionsChanged(currentOptions, nextOptions) {
+  return guildOptionsSignature(currentOptions) !== guildOptionsSignature(nextOptions);
+}
+
+function guildOptionsSignature(options) {
+  try {
+    return JSON.stringify(options ?? null);
+  } catch {
+    return "";
+  }
+}
+
+function shouldDeferGuildOptionsRender() {
+  const active = document.activeElement;
+  return (
+    active instanceof HTMLInputElement ||
+      active instanceof HTMLSelectElement ||
+      active instanceof HTMLTextAreaElement
+  );
 }
 
 async function loadServiceStatus(options = {}) {
@@ -1417,6 +1610,42 @@ async function loadHostData(options = {}) {
   } finally {
     if (requestId === state.requestIds.host) {
       state.hostLoading = false;
+      render();
+    }
+  }
+}
+
+async function loadHostAdminData(options = {}) {
+  await Promise.all([
+    loadHostData(options),
+    loadAdminPlaylists(options),
+  ]);
+}
+
+async function loadAdminPlaylists(options = {}) {
+  if (!state.user || !canViewHostAdmin()) {
+    return;
+  }
+  const requestId = state.requestIds.adminPlaylists + 1;
+  state.requestIds.adminPlaylists = requestId;
+  state.adminPlaylistsLoading = !options.silent;
+  state.adminPlaylistsError = null;
+  render();
+
+  try {
+    const playlists = await api.adminPlaylists();
+    if (requestId !== state.requestIds.adminPlaylists) {
+      return;
+    }
+    state.adminPlaylists = normalizeAdminPlaylists(playlists);
+  } catch (error) {
+    if (requestId !== state.requestIds.adminPlaylists) {
+      return;
+    }
+    state.adminPlaylistsError = error instanceof Error ? error.message : "ユーザー別プレイリストを取得できませんでした。";
+  } finally {
+    if (requestId === state.requestIds.adminPlaylists) {
+      state.adminPlaylistsLoading = false;
       render();
     }
   }
@@ -1682,6 +1911,10 @@ function serviceCheckingActive() {
   return state.serviceStatus.loading && !state.user;
 }
 
+function authCheckingActive() {
+  return Boolean(state.authChecking && getAuthToken() && !state.user);
+}
+
 function guardMaintenanceActive() {
   return (
     state.guard.source === "api-error" ||
@@ -1715,6 +1948,35 @@ function syncServiceStatusRefresh() {
   if (serviceStatusRefreshTimerId) {
     window.clearInterval(serviceStatusRefreshTimerId);
     serviceStatusRefreshTimerId = null;
+  }
+}
+
+function shouldAutoRefreshGuildOptions() {
+  const view = activeSettingsView();
+  return Boolean(
+    state.activeProduct === "one" &&
+      state.user &&
+      state.selectedGuildId &&
+      !state.loading &&
+      !document.hidden &&
+      (view === "tts" || view === "features"),
+  );
+}
+
+function syncGuildOptionsAutoRefresh() {
+  if (shouldAutoRefreshGuildOptions()) {
+    if (!guildOptionsRefreshTimerId) {
+      guildOptionsRefreshTimerId = window.setInterval(() => {
+        if (shouldAutoRefreshGuildOptions()) {
+          void refreshSelectedGuildOptions({ silent: true });
+        }
+      }, GUILD_OPTIONS_REFRESH_INTERVAL_MS);
+    }
+    return;
+  }
+  if (guildOptionsRefreshTimerId) {
+    window.clearInterval(guildOptionsRefreshTimerId);
+    guildOptionsRefreshTimerId = null;
   }
 }
 
@@ -1829,6 +2091,20 @@ function normalizePlaylist(playlist) {
     tracks: Array.isArray(playlist?.tracks) ? playlist.tracks.map(normalizePlaylistTrack) : [],
     updated_at: playlist?.updated_at ?? null,
   };
+}
+
+function normalizeAdminPlaylists(playlists) {
+  return Array.isArray(playlists)
+    ? playlists
+        .map((playlist) => ({
+          user_id: String(playlist?.user_id ?? ""),
+          username: normalizeNullableString(playlist?.username),
+          avatar_url: normalizeNullableString(playlist?.avatar_url),
+          tracks: Array.isArray(playlist?.tracks) ? playlist.tracks.map(normalizePlaylistTrack) : [],
+          updated_at: playlist?.updated_at ?? null,
+        }))
+        .filter((playlist) => playlist.user_id)
+    : [];
 }
 
 function normalizeUserActivity(activity) {
@@ -2464,6 +2740,7 @@ function syncTurnstileWidget() {
 }
 
 function resetSessionState() {
+  state.authChecking = false;
   state.user = null;
   state.guilds = [];
   state.selectedGuildId = null;
@@ -2480,6 +2757,9 @@ function resetSessionState() {
   state.hostLoading = false;
   state.hostActionRunning = null;
   state.hostLastUpdatedAt = null;
+  state.adminPlaylists = [];
+  state.adminPlaylistsLoading = false;
+  state.adminPlaylistsError = null;
   state.playlist = null;
   state.playlistLoading = false;
   state.playlistSaving = false;
@@ -2648,6 +2928,7 @@ function render() {
   document.body.classList.toggle("body--status-only", statusOnly);
   if (state.activeProduct === "one") {
     syncServiceStatusRefresh();
+    syncGuildOptionsAutoRefresh();
     syncHostAutoRefresh();
     syncTurnstileWidget();
     syncPlaylistPlayers();
@@ -2672,11 +2953,14 @@ function renderMainContent() {
   if (serviceMaintenanceActive()) {
     return renderServiceStatusPanel("maintenance");
   }
+  if (authCheckingActive()) {
+    return renderServiceStatusPanel("checking");
+  }
   return state.user ? renderDashboard() : renderLoginPanel();
 }
 
 function serviceStatusOnlyActive() {
-  return serviceCheckingActive() || serviceMaintenanceActive();
+  return serviceCheckingActive() || serviceMaintenanceActive() || authCheckingActive();
 }
 
 function renderTopbar() {
@@ -2769,6 +3053,9 @@ function isProductTopNavActive(productId) {
 }
 
 function loginButtonState() {
+  if (authCheckingActive()) {
+    return { icon: "radio", label: "接続中" };
+  }
   if (serviceMaintenanceActive()) {
     return { icon: "radio", label: "メンテナンス中" };
   }
@@ -2782,6 +3069,9 @@ function loginButtonState() {
 }
 
 function guardLoginButtonState() {
+  if (authCheckingActive()) {
+    return { icon: "radio", label: "接続中" };
+  }
   if (state.security.loading) {
     return { icon: "radio", label: "確認中" };
   }
@@ -2879,6 +3169,7 @@ function renderSecurityVerification() {
 
 function loginBlocked() {
   return (
+    authCheckingActive() ||
     state.serviceStatus.loading ||
     serviceMaintenanceActive() ||
     state.security.loading ||
@@ -2889,6 +3180,7 @@ function loginBlocked() {
 
 function guardLoginBlocked() {
   return (
+    authCheckingActive() ||
     state.security.loading ||
     Boolean(state.security.error && !state.security.verified) ||
     (state.security.enabled && !state.security.verified)
@@ -3219,6 +3511,27 @@ function normalizeGuardModerationChannelRows(value) {
   return rows;
 }
 
+function normalizeGuardModerationWords(value) {
+  const rawItems = typeof value === "string"
+    ? value.split(/[\n,、]+/)
+    : Array.isArray(value)
+      ? value
+      : value
+        ? [value]
+        : [];
+  const seen = new Set();
+  const words = [];
+  rawItems.forEach((item) => {
+    const word = String(item ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const key = word.toLocaleLowerCase();
+    if (word && !seen.has(key)) {
+      seen.add(key);
+      words.push(word);
+    }
+  });
+  return words.slice(0, 100);
+}
+
 function normalizeGuardModerationFeatureSettings(featureId, settings) {
   const defaults = GUARD_MODERATION_DEFAULTS[featureId] ?? {
     enabled: true,
@@ -3236,18 +3549,24 @@ function normalizeGuardModerationFeatureSettings(featureId, settings) {
       : defaults.log_channel_ids;
   const logChannelIds = normalizeGuardModerationChannelRows(rawLogChannelRows);
   const firstLogChannelId = logChannelIds.find((item) => item) ?? "";
-  const rawAllChannelsEnabled = settings?.all_channels_enabled;
-  const allChannelsEnabled = rawAllChannelsEnabled == null
-    ? !Boolean(settings?.all_channels_disabled)
-    : Boolean(rawAllChannelsEnabled);
+  const targetChannelIds = GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS.has(featureId)
+    ? normalizeGuardModerationChannelIds(settings?.target_channel_ids ?? settings?.ignored_channel_ids ?? settings?.disabled_channel_ids ?? defaults.target_channel_ids)
+    : [];
+  const level = GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS.has(featureId)
+    ? defaults.level
+    : normalizeGuardModerationLevel(settings?.level ?? defaults.level);
   return {
     enabled: settings?.enabled !== false,
-    level: normalizeGuardModerationLevel(settings?.level ?? defaults.level),
+    level,
     action: normalizeGuardModerationAction(settings?.action, defaults.action),
     log_channel_id: firstLogChannelId,
     log_channel_ids: logChannelIds,
-    target_channel_ids: normalizeGuardModerationChannelIds(settings?.target_channel_ids ?? settings?.disabled_channel_ids ?? defaults.target_channel_ids),
-    all_channels_enabled: allChannelsEnabled,
+    target_channel_ids: targetChannelIds,
+    ignored_channel_ids: targetChannelIds,
+    all_channels_enabled: true,
+    ng_words: GUARD_MODERATION_NG_WORD_FEATURE_IDS.has(featureId)
+      ? normalizeGuardModerationWords(settings?.ng_words ?? settings?.words ?? defaults.ng_words)
+      : [],
   };
 }
 
@@ -3826,7 +4145,7 @@ function renderGuardModeration() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>招待リンク連投、外部リンク、スパム、暴言、下ネタの検知レベル・処罰・処罰ログチャンネル・対象チャンネルを機能ごとに設定します。</span>
+        ${icon("shield")}<span>連投リンク、招待リンク、連続投稿、絵文字スパム、連続メンションはペースと処置を設定します。暴言と下ネタは処罰と検知しないチャンネル、NGワードは追加語句と処罰を設定します。</span>
       </div>
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
       ${state.guard.moderationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.moderationMessage)}</span></p>` : ""}
@@ -3847,21 +4166,28 @@ function renderGuardModeration() {
 
 function renderGuardModerationFeatureCard(feature, settings, guild) {
   const normalized = normalizeGuardModerationFeatureSettings(feature.id, settings);
+  const isPaceFeature = GUARD_MODERATION_PACE_FEATURE_IDS.has(feature.id);
+  const isTextFilterFeature = GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS.has(feature.id);
+  const isNgWordFeature = GUARD_MODERATION_NG_WORD_FEATURE_IDS.has(feature.id);
   const statusText = !normalized.enabled
     ? "無効"
-    : normalized.all_channels_enabled
-      ? "全チャンネル対象"
-      : normalized.target_channel_ids.length
-        ? `対象 ${normalized.target_channel_ids.length}`
-        : "対象なし";
-  const allChannelsLabel = feature.id === "other_links" || feature.id === "invite_spam"
-    ? "全チャンネルでURLを無効にする"
-    : "全チャンネルで禁止する";
+    : isTextFilterFeature
+      ? normalized.target_channel_ids.length
+        ? `除外 ${normalized.target_channel_ids.length}`
+        : "除外なし"
+      : isNgWordFeature
+        ? `NG ${normalized.ng_words.length}`
+      : "有効";
+  const featureIcon = feature.id === "other_links"
+    ? "link"
+    : feature.id === "spam" || feature.id === "mention_spam"
+      ? "message"
+      : "shield";
   return `
     <article class="feature-card guard-moderation-card">
       <div class="feature-card__header">
-        <div class="panel-heading">${icon(feature.id === "other_links" ? "link" : feature.id === "spam" ? "message" : "shield")}<h2>${escapeHtml(feature.label)}</h2></div>
-        <span class="feature-status ${normalized.enabled && (normalized.all_channels_enabled || normalized.target_channel_ids.length) ? "feature-status--on" : ""}">${escapeHtml(statusText)}</span>
+        <div class="panel-heading">${icon(featureIcon)}<h2>${escapeHtml(feature.label)}</h2></div>
+        <span class="feature-status ${normalized.enabled ? "feature-status--on" : ""}">${escapeHtml(statusText)}</span>
       </div>
       <p class="guard-moderation-card__description">${escapeHtml(feature.description)}</p>
       <div class="settings-grid guard-moderation-card__fields">
@@ -3869,95 +4195,57 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
           <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="enabled" ${normalized.enabled ? "checked" : ""} />
           <span>この検知を有効にする</span>
         </label>
-        <label class="toggle-row guard-verification-toggle">
-          <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="all_channels_enabled" ${normalized.all_channels_enabled ? "checked" : ""} />
-          <span>${escapeHtml(allChannelsLabel)}</span>
-        </label>
-        <label class="field">
-          <span>検知レベル</span>
-          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
-            ${GUARD_MODERATION_LEVELS.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}</option>`).join("")}
-          </select>
-        </label>
+        ${isPaceFeature ? `
+          <label class="field">
+            <span>検知ペース</span>
+            <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
+              ${GUARD_MODERATION_LEVELS.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}</option>`).join("")}
+            </select>
+          </label>
+        ` : ""}
         <label class="field">
           <span>処罰内容</span>
           <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="action">
             ${GUARD_MODERATION_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
           </select>
         </label>
-        ${renderGuardModerationLogChannelsField(feature.id, normalized.log_channel_ids, guild)}
-        ${renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.target_channel_ids, guild)}
+        ${isTextFilterFeature ? renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.target_channel_ids, guild) : ""}
+        ${isNgWordFeature ? renderGuardModerationNgWordsField(feature.id, normalized.ng_words) : ""}
       </div>
     </article>
   `;
 }
 
-function renderGuardModerationChannelField(featureId, selectedValue, guild) {
-  const channels = guild?.text_channels ?? [];
-  if (!channels.length) {
-    const optionText = selectedValue ? `保存済み: ${selectedValue}` : "Guard APIに接続すると選択できます";
-    return `
-      <label class="field guard-moderation-log-field">
-        <span>処罰ログチャンネル</span>
-        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id" disabled>
-          <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
-        </select>
-      </label>
-    `;
-  }
+function renderGuardModerationNgWordsField(featureId, words) {
+  const normalizedWords = normalizeGuardModerationWords(words);
   return `
-    <label class="field guard-moderation-log-field">
-      <span>処罰ログチャンネル</span>
-      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_id" size="${Math.min(Math.max(channels.length + 1, 3), 5)}">
-        <option value="">未設定</option>
-        ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
-      </select>
-    </label>
-  `;
-}
-
-function renderGuardModerationLogChannelsField(featureId, selectedValues, guild) {
-  const channels = guild?.text_channels ?? [];
-  const rows = normalizeGuardModerationChannelRows(selectedValues);
-  return `
-    <div class="guard-moderation-log-field guard-moderation-add-list auto-rules">
-      <div class="auto-rules__header">
-        <span>処罰ログチャンネル</span>
-        <button class="icon-button icon-button--ghost" type="button" data-action="add-guard-moderation-log-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" ${channels.length ? "" : "disabled"}>
-          ${icon("plus")}<span>追加</span>
-        </button>
+    <div class="field guard-moderation-channel-field">
+      <span>NGワード</span>
+      <div class="guard-moderation-add-list auto-rules">
+        <div class="auto-rules__header">
+          <input type="text" data-guard-moderation-ng-word-input="${escapeAttribute(featureId)}" placeholder="追加するNGワード" />
+          <button class="icon-button icon-button--ghost" type="button" data-action="add-guard-moderation-ng-word" data-guard-moderation-feature="${escapeAttribute(featureId)}">
+            ${icon("plus")}<span>追加</span>
+          </button>
+        </div>
       </div>
-      <div class="auto-rules__list">
-        ${
-          rows.length > 0
-            ? rows.map((channelId, index) => renderGuardModerationLogChannelRow(featureId, channelId, index, channels)).join("")
-            : `<div class="empty-state">処罰ログチャンネルはまだ追加されていません。</div>`
-        }
+      <div class="guard-moderation-channel-list" role="list">
+        ${normalizedWords.length
+          ? normalizedWords.map((word) => `
+            <button class="guard-moderation-channel-chip" type="button" data-action="remove-guard-moderation-ng-word" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-ng-word="${escapeAttribute(word)}" title="NGワードから外す">
+              <span>${escapeHtml(word)}</span>${icon("trash")}
+            </button>
+          `).join("")
+          : `<span class="guard-moderation-channel-empty">まだ追加されていません</span>`}
       </div>
-    </div>
-  `;
-}
-
-function renderGuardModerationLogChannelRow(featureId, channelId, index, channels) {
-  return `
-    <div class="guard-moderation-log-row">
-      <label class="field auto-rule-row__field">
-        <span>送信先</span>
-        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="log_channel_ids" data-index="${index}" ${channels.length ? "" : "disabled"}>
-          <option value="">未設定</option>
-          ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${String(channel.id) === channelId ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
-        </select>
-      </label>
-      <button class="icon-button icon-button--ghost guard-moderation-log-row__remove" type="button" data-action="remove-guard-moderation-log-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-index="${index}" title="削除">
-        ${icon("trash")}
-      </button>
+      <small>追加した語句を含むメッセージを検知します。複数まとめて追加する場合は改行またはカンマで区切れます。</small>
     </div>
   `;
 }
 
 function renderGuardModerationTargetChannelsField(featureId, selectedValues, guild) {
   const channels = guild?.text_channels ?? [];
-  const label = featureId === "other_links" || featureId === "invite_spam" ? "URL無効チャンネル" : "禁止チャンネル";
+  const label = "検知しないチャンネル";
   const selectedIds = new Set(normalizeGuardModerationChannelIds(selectedValues));
   if (!channels.length) {
     const optionText = selectedIds.size ? `保存済み: ${[...selectedIds].join(", ")}` : "Guard APIに接続すると選択できます";
@@ -3967,7 +4255,7 @@ function renderGuardModerationTargetChannelsField(featureId, selectedValues, gui
         <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple disabled>
           <option value="">${escapeHtml(optionText)}</option>
         </select>
-        <small>全チャンネル対象をオフにした時、ここで選んだチャンネルだけに適用します。</small>
+        <small>追加したチャンネルでは、この機能の検知を行いません。</small>
       </label>
     `;
   }
@@ -3977,14 +4265,14 @@ function renderGuardModerationTargetChannelsField(featureId, selectedValues, gui
       <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple size="${Math.min(Math.max(channels.length, 3), 6)}">
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${selectedIds.has(channel.id) ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
       </select>
-      <small>全チャンネル対象をオフにした時、ここで選んだチャンネルだけに適用します。</small>
+      <small>追加したチャンネルでは、この機能の検知を行いません。</small>
     </label>
   `;
 }
 
 function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedValues, guild) {
   const channels = guild?.text_channels ?? [];
-  const label = featureId === "other_links" || featureId === "invite_spam" ? "URL無効チャンネル" : "禁止チャンネル";
+  const label = "検知しないチャンネル";
   const selectedIds = new Set(normalizeGuardModerationChannelIds(selectedValues));
   if (!channels.length) {
     const optionText = selectedIds.size ? `保存済み: ${[...selectedIds].join(", ")}` : "Guard APIに接続すると選択できます";
@@ -3994,7 +4282,7 @@ function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedVal
         <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" disabled>
           <option value="">${escapeHtml(optionText)}</option>
         </select>
-        <small>全チャンネル対象をオフにすると、追加済みのチャンネルだけに適用します。</small>
+        <small>追加したチャンネルでは、この機能の検知を行いません。</small>
       </label>
     `;
   }
@@ -4018,13 +4306,13 @@ function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedVal
       <div class="guard-moderation-channel-list" role="list">
         ${selectedRows.length
           ? selectedRows.map((channel) => `
-            <button class="guard-moderation-channel-chip" type="button" data-action="remove-guard-moderation-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-channel-id="${escapeAttribute(channel.id)}" title="対象から外す">
+            <button class="guard-moderation-channel-chip" type="button" data-action="remove-guard-moderation-channel" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-channel-id="${escapeAttribute(channel.id)}" title="除外から外す">
               <span>${escapeHtml(channel.label)}</span>${icon("trash")}
             </button>
           `).join("")
           : `<span class="guard-moderation-channel-empty">まだ追加されていません</span>`}
       </div>
-      <small>全チャンネル対象をオフにすると、追加済みのチャンネルだけに適用します。チャンネルは選ぶたびに追加されます。</small>
+      <small>追加したチャンネルでは、この機能の検知を行いません。チャンネルは選ぶたびに追加されます。</small>
     </label>
   `;
 }
@@ -4046,7 +4334,7 @@ function renderGuardLogging() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("activity")}<span>参加、脱退、ロール付与、VC入退室、メッセージ削除・編集のログ送信先をイベントごとに設定します。</span>
+        ${icon("activity")}<span>参加、BAN、招待、ロール、チャンネル、VC、メッセージなどのログ送信先をイベントごとに設定します。</span>
       </div>
       ${state.guard.loggingError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.loggingError)}</span></p>` : ""}
       ${state.guard.loggingMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.loggingMessage)}</span></p>` : ""}
@@ -4521,7 +4809,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
     }
     form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
       ...currentFeature,
-      all_channels_enabled: false,
+      all_channels_enabled: true,
       target_channel_ids: normalizeGuardModerationChannelIds([
         ...currentFeature.target_channel_ids,
         channelId,
@@ -4550,7 +4838,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
         : field === "target_channel_ids"
           ? normalizeGuardModerationChannelIds(value)
         : value,
-    ...(field === "target_channel_ids" ? { all_channels_enabled: false } : {}),
+    ...(field === "target_channel_ids" ? { all_channels_enabled: true } : {}),
   });
   state.guard.moderationForm = form;
   state.guard.moderationError = null;
@@ -4558,46 +4846,6 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   if (options.renderAfter) {
     render();
   }
-}
-
-function addGuardModerationLogChannel(featureId) {
-  if (!GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
-    return;
-  }
-  const form = normalizeGuardModerationForm(state.guard.moderationForm);
-  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
-  const logChannelIds = [...currentFeature.log_channel_ids];
-  if (!logChannelIds.includes("")) {
-    logChannelIds.push("");
-  }
-  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
-    ...currentFeature,
-    log_channel_ids: logChannelIds,
-  });
-  state.guard.moderationForm = form;
-  state.guard.moderationError = null;
-  updateDirtyState("guardModeration");
-  render();
-}
-
-function removeGuardModerationLogChannel(featureId, index) {
-  if (!GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
-    return;
-  }
-  const rowIndex = Number(index);
-  if (!Number.isInteger(rowIndex) || rowIndex < 0) {
-    return;
-  }
-  const form = normalizeGuardModerationForm(state.guard.moderationForm);
-  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
-  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
-    ...currentFeature,
-    log_channel_ids: currentFeature.log_channel_ids.filter((_, itemIndex) => itemIndex !== rowIndex),
-  });
-  state.guard.moderationForm = form;
-  state.guard.moderationError = null;
-  updateDirtyState("guardModeration");
-  render();
 }
 
 function removeGuardModerationTargetChannel(featureId, channelId) {
@@ -4613,6 +4861,50 @@ function removeGuardModerationTargetChannel(featureId, channelId) {
   form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
     ...currentFeature,
     target_channel_ids: currentFeature.target_channel_ids.filter((item) => item !== normalizedChannelId),
+  });
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
+}
+
+function addGuardModerationNgWord(featureId) {
+  if (!GUARD_MODERATION_NG_WORD_FEATURE_IDS.has(featureId)) {
+    return;
+  }
+  const input = document.querySelector(`[data-guard-moderation-ng-word-input="${CSS.escape(featureId)}"]`);
+  const additions = normalizeGuardModerationWords(input instanceof HTMLInputElement ? input.value : "");
+  if (!additions.length) {
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+    ...currentFeature,
+    ng_words: normalizeGuardModerationWords([...currentFeature.ng_words, ...additions]),
+  });
+  if (input instanceof HTMLInputElement) {
+    input.value = "";
+  }
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
+}
+
+function removeGuardModerationNgWord(featureId, word) {
+  if (!GUARD_MODERATION_NG_WORD_FEATURE_IDS.has(featureId)) {
+    return;
+  }
+  const normalizedWord = String(word ?? "").trim();
+  if (!normalizedWord) {
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
+  form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
+    ...currentFeature,
+    ng_words: currentFeature.ng_words.filter((item) => item !== normalizedWord),
   });
   state.guard.moderationForm = form;
   state.guard.moderationError = null;
@@ -5202,14 +5494,17 @@ function renderPlaylistPanel(playlist) {
   `;
 }
 
-function renderPlaylistTrack(track) {
+function renderPlaylistTrack(track, options = {}) {
   const sourceLabel = track.source_type === "upload" ? "mp3アップロード" : "URL";
+  const readonly = Boolean(options.readonly);
+  const ownerUserId = normalizeNullableString(options.ownerUserId);
   const escapedTrackId = escapeAttribute(track.id);
   const escapedTitle = escapeAttribute(track.title);
   const previewDuration = playlistPreviewDuration(track.duration);
-  const previewUrl = playlistPreviewUrl(track.id);
+  const previewUrl = playlistPreviewUrl(track.id, ownerUserId);
+  const rowClass = `playlist-track-row${readonly ? " playlist-track-row--readonly" : ""}`;
   return `
-    <article class="playlist-track-row">
+    <article class="${rowClass}">
       <div class="playlist-track-row__art">
         <div class="playlist-record" aria-hidden="true">
           <span class="playlist-record__shine"></span>
@@ -5230,7 +5525,7 @@ function renderPlaylistTrack(track) {
           <span>${escapeHtml(sourceLabel)} / プレビュー${escapeHtml(formatDuration(previewDuration))} / ${escapeHtml(formatDateTime(track.created_at))}</span>
         </div>
         <div class="playlist-player" data-playlist-player data-track-id="${escapedTrackId}" data-track-title="${escapedTitle}" data-track-duration="${escapeAttribute(previewDuration)}">
-          <audio class="playlist-player__audio" preload="auto" src="${escapeAttribute(previewUrl)}" data-track-audio data-track-id="${escapedTrackId}"></audio>
+          <audio class="playlist-player__audio" preload="${readonly ? "none" : "auto"}" src="${escapeAttribute(previewUrl)}" data-track-audio data-track-id="${escapedTrackId}"></audio>
           <button class="playlist-player__toggle" type="button" data-action="playlist-toggle-play" data-track-id="${escapedTrackId}" aria-label="${escapedTitle}を再生">
             ${icon("play")}
           </button>
@@ -5241,17 +5536,25 @@ function renderPlaylistTrack(track) {
           </div>
         </div>
       </div>
-      <button class="icon-button icon-button--ghost playlist-track-row__remove" type="button" data-action="playlist-delete-track" data-track-id="${escapedTrackId}" title="削除" ${state.playlistSaving ? "disabled" : ""}>
-        ${icon("trash")}
-      </button>
+      ${
+        readonly
+          ? ""
+          : `<button class="icon-button icon-button--ghost playlist-track-row__remove" type="button" data-action="playlist-delete-track" data-track-id="${escapedTrackId}" title="削除" ${state.playlistSaving ? "disabled" : ""}>
+              ${icon("trash")}
+            </button>`
+      }
     </article>
   `;
 }
 
-function playlistPreviewUrl(trackId) {
+function playlistPreviewUrl(trackId, ownerUserId = null) {
   const token = getAuthToken();
   const query = token ? `?session_token=${encodeURIComponent(token)}` : "";
-  return `${API_BASE_URL}/playlist/tracks/${encodeURIComponent(trackId)}/preview${query}`;
+  const encodedTrackId = encodeURIComponent(trackId);
+  const path = ownerUserId
+    ? `/playlist/admin/users/${encodeURIComponent(ownerUserId)}/tracks/${encodedTrackId}/preview`
+    : `/playlist/tracks/${encodedTrackId}/preview`;
+  return `${API_BASE_URL}${path}${query}`;
 }
 
 function syncPlaylistPlayers() {
@@ -6029,6 +6332,7 @@ function renderHostAdminPanel() {
   const status = state.hostStatus;
   const bot = status?.bot_status ?? null;
   const autoRefreshLabel = `自動更新 ${Math.round(HOST_REFRESH_INTERVAL_MS / 1000)}秒`;
+  const refreshBusy = state.hostLoading || state.adminPlaylistsLoading;
   return `
     <section class="settings-panel host-admin" aria-label="BOT管理者用ページ">
       <div class="settings-panel__header">
@@ -6036,11 +6340,11 @@ function renderHostAdminPanel() {
           ${icon("activity")}<h2>BOT詳細</h2>
         </div>
         <div class="host-admin__toolbar">
-          <span class="refresh-pill ${state.hostLoading ? "refresh-pill--loading" : ""}">
+          <span class="refresh-pill ${refreshBusy ? "refresh-pill--loading" : ""}">
             ${icon("radio")}<span>${escapeHtml(autoRefreshLabel)}</span><small>${escapeHtml(formatTimeOnly(state.hostLastUpdatedAt))}</small>
           </span>
-          <button class="icon-button icon-button--primary" type="button" data-action="refresh-host" ${state.hostLoading ? "disabled" : ""}>
-            ${icon("refresh")}<span>${state.hostLoading ? "更新中" : "今すぐ更新"}</span>
+          <button class="icon-button icon-button--primary" type="button" data-action="refresh-host" ${refreshBusy ? "disabled" : ""}>
+            ${icon("refresh")}<span>${refreshBusy ? "更新中" : "今すぐ更新"}</span>
           </button>
         </div>
       </div>
@@ -6114,6 +6418,7 @@ function renderHostAdminPanel() {
                 ])}
               </section>
             </div>
+            ${renderAdminPlaylistsPanel()}
             <section class="host-card host-card--actions">
               <div class="host-card__header">
                 ${icon("terminal")}<h3>PC操作</h3>
@@ -6134,6 +6439,62 @@ function renderHostAdminPanel() {
           : `<div class="empty-state">${state.hostLoading ? "管理者用情報を取得中です。" : "管理者用情報はまだ取得されていません。"}</div>`
       }
     </section>
+  `;
+}
+
+function renderAdminPlaylistsPanel() {
+  const playlists = state.adminPlaylists;
+  const totalTracks = playlists.reduce((total, playlist) => total + (playlist.tracks?.length ?? 0), 0);
+  const body = state.adminPlaylistsLoading
+    ? `<div class="empty-state">ユーザー別プレイリストを取得中です。</div>`
+    : playlists.length
+      ? `<div class="host-playlist-list">${playlists.map(renderAdminPlaylistUser).join("")}</div>`
+      : `<div class="empty-state">ユーザーのプレイリストデータはまだありません。</div>`;
+  return `
+    <section class="host-card host-playlists">
+      <div class="host-card__header">
+        ${icon("music")}<h3>ユーザープレイリスト</h3>
+        <span class="feature-status ${totalTracks ? "feature-status--on" : ""}">
+          ${escapeHtml(`${playlists.length}人 / ${totalTracks}曲`)}
+        </span>
+      </div>
+      ${state.adminPlaylistsError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.adminPlaylistsError)}</span></p>` : ""}
+      ${body}
+    </section>
+  `;
+}
+
+function renderAdminPlaylistUser(playlist) {
+  const tracks = playlist.tracks ?? [];
+  const displayName = playlist.username || `User ${playlist.user_id}`;
+  const trackLabel = `${tracks.length}曲`;
+  return `
+    <details class="host-playlist-user" ${tracks.length ? "open" : ""}>
+      <summary class="host-playlist-user__summary">
+        <div class="host-playlist-user__identity">
+          ${
+            playlist.avatar_url
+              ? `<img class="host-playlist-user__avatar" src="${escapeAttribute(playlist.avatar_url)}" alt="" />`
+              : `<span class="host-playlist-user__avatar host-playlist-user__avatar--fallback">${icon("user")}</span>`
+          }
+          <div class="host-playlist-user__meta">
+            <strong>${escapeHtml(displayName)}</strong>
+            <span>Discord ID ${escapeHtml(playlist.user_id)}</span>
+          </div>
+        </div>
+        <div class="host-playlist-user__stats">
+          <span>${escapeHtml(trackLabel)}</span>
+          <span>${escapeHtml(`更新 ${formatDateTime(playlist.updated_at)}`)}</span>
+        </div>
+      </summary>
+      <div class="host-playlist-user__tracks">
+        ${
+          tracks.length
+            ? tracks.map((track) => renderPlaylistTrack(track, { ownerUserId: playlist.user_id, readonly: true })).join("")
+            : `<div class="empty-state">登録曲はありません。</div>`
+        }
+      </div>
+    </details>
   `;
 }
 
@@ -6355,6 +6716,9 @@ function collectStatusToasts() {
     if (state.hostError) {
       toasts.push({ tone: "error", message: state.hostError });
     }
+    if (state.adminPlaylistsError) {
+      toasts.push({ tone: "error", message: state.adminPlaylistsError });
+    }
     if (state.hostMessage) {
       toasts.push({ tone: "success", message: state.hostMessage });
     }
@@ -6522,7 +6886,7 @@ function requestGuardGuildChange(guildId) {
 
 function loadActivePageData() {
   if (activeSettingsView() === "host") {
-    void loadHostData();
+    void loadHostAdminData();
   } else if (activeSettingsView() === "user") {
     void loadPlaylist({ silent: true });
     void loadUserActivity({ silent: true });
@@ -6705,12 +7069,12 @@ function handleClick(event) {
       void saveGuardVerificationSettings();
     } else if (action === "save-guard-moderation-settings") {
       void saveGuardModerationSettings();
-    } else if (action === "add-guard-moderation-log-channel") {
-      addGuardModerationLogChannel(actionEl.dataset.guardModerationFeature);
-    } else if (action === "remove-guard-moderation-log-channel") {
-      removeGuardModerationLogChannel(actionEl.dataset.guardModerationFeature, actionEl.dataset.index);
     } else if (action === "remove-guard-moderation-channel") {
       removeGuardModerationTargetChannel(actionEl.dataset.guardModerationFeature, actionEl.dataset.channelId);
+    } else if (action === "add-guard-moderation-ng-word") {
+      addGuardModerationNgWord(actionEl.dataset.guardModerationFeature);
+    } else if (action === "remove-guard-moderation-ng-word") {
+      removeGuardModerationNgWord(actionEl.dataset.guardModerationFeature, actionEl.dataset.ngWord);
     } else if (action === "save-guard-logging-settings") {
       void saveGuardLoggingSettings();
     } else if (action === "login") {
@@ -6728,7 +7092,7 @@ function handleClick(event) {
     } else if (action === "refresh-service-status") {
       void refreshServiceStatus();
     } else if (action === "refresh-host") {
-      void loadHostData();
+      void loadHostAdminData();
     } else if (action === "reload-guild-data") {
       if (state.selectedGuildId) {
         void loadGuildData(state.selectedGuildId);
