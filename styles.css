@@ -2551,6 +2551,88 @@ body.body--guard.body--status-only .app-shell--guard {
   letter-spacing: 0;
 }
 
+.admin-guilds {
+  gap: 12px;
+}
+
+.admin-guild-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-guild-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(244, 218, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(17, 9, 30, 0.28)),
+    rgba(17, 9, 30, 0.2);
+}
+
+.admin-guild-row__icon {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.admin-guild-row__icon--fallback {
+  display: grid;
+  place-items: center;
+  background: rgba(111, 232, 255, 0.12);
+  color: var(--text-strong);
+  font-weight: 850;
+}
+
+.admin-guild-row__body {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.admin-guild-row__body strong,
+.admin-guild-row__body small,
+.admin-guild-row__body code,
+.admin-guild-row__body a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-guild-row__body strong {
+  color: var(--text-strong);
+  font-weight: 850;
+}
+
+.admin-guild-row__body small {
+  color: var(--muted-2);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.admin-guild-row__body code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.admin-guild-row__body a {
+  color: var(--cyan);
+  font-size: 0.74rem;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.admin-guild-row__invite {
+  min-width: 148px;
+}
+
 .host-playlists {
   gap: 12px;
 }
@@ -4439,6 +4521,15 @@ input[type="checkbox"]:checked::before {
 
   .playlist-track-row__remove {
     grid-column: 1 / -1;
+  }
+
+  .admin-guild-row {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .admin-guild-row__invite {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .login-panel {

@@ -239,6 +239,14 @@ const GUARD_FEATURES = [
     help: "イベントごとに有効化とログを送るチャンネルを設定します。",
     icon: "activity",
   },
+  {
+    id: "admin",
+    label: "管理者用",
+    description: "Guard BOTの稼働状況と参加サーバーを確認します。",
+    help: "Guard BOTが参加しているサーバー一覧を確認し、管理者用の招待リンクを作成します。",
+    icon: "bot",
+    adminOnly: true,
+  },
 ];
 
 const GUARD_FEATURE_ROWS = [
@@ -492,6 +500,8 @@ const state = {
   hostMessage: null,
   hostLoading: false,
   hostActionRunning: null,
+  hostInviteRunning: null,
+  hostInviteLinks: {},
   hostLastUpdatedAt: null,
   adminPlaylists: [],
   adminPlaylistsLoading: false,
@@ -571,6 +581,10 @@ const state = {
     moderationError: null,
     loggingMessage: null,
     loggingError: null,
+    adminMessage: null,
+    adminError: null,
+    adminInviteRunning: null,
+    adminInviteLinks: {},
     savedVerificationForm: null,
     savedModerationForm: null,
     savedLoggingForm: null,
@@ -1240,6 +1254,10 @@ const api = {
       method: "POST",
       body: JSON.stringify({ action }),
     }),
+  createHostGuildInvite: (guildId) =>
+    request(`/host/guilds/${encodeURIComponent(guildId)}/invite`, {
+      method: "POST",
+    }),
   sendSupportInquiry: (payload) =>
     request("/support/inquiries", {
       method: "POST",
@@ -1852,8 +1870,31 @@ function normalizeHostStatus(status) {
       upnp_lease_seconds: 0,
       ...(status?.configuration ?? {}),
     },
-    bot_status: status?.bot_status ?? null,
+    bot_status: status?.bot_status
+      ? {
+          ...status.bot_status,
+          guilds: normalizeBotGuilds(status.bot_status.guilds),
+        }
+      : null,
   };
+}
+
+function normalizeBotGuilds(guilds) {
+  if (!Array.isArray(guilds)) {
+    return [];
+  }
+  return guilds
+    .map((guild) => ({
+      id: String(guild?.id ?? ""),
+      name: String(guild?.name ?? guild?.id ?? "Unknown Server"),
+      icon_url: normalizeNullableString(guild?.icon_url),
+      member_count: guild?.member_count == null ? null : Number(guild.member_count),
+      owner_id: normalizeNullableString(guild?.owner_id),
+      created_at: guild?.created_at ?? null,
+      joined_at: guild?.joined_at ?? null,
+      shard_id: guild?.shard_id == null ? null : Number(guild.shard_id),
+    }))
+    .filter((guild) => guild.id);
 }
 
 function normalizeServiceStatus(status) {
@@ -2012,6 +2053,108 @@ async function runHostAction(action) {
     state.hostActionRunning = null;
     render();
   }
+}
+
+async function createHostGuildInvite(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  if (!resolvedGuildId) {
+    return;
+  }
+  state.hostInviteRunning = resolvedGuildId;
+  state.hostError = null;
+  state.hostMessage = null;
+  const pendingInviteWindow = openPendingInviteWindow();
+  render();
+
+  try {
+    const invite = normalizeAdminGuildInvite(await api.createHostGuildInvite(resolvedGuildId));
+    state.hostInviteLinks = { ...state.hostInviteLinks, [resolvedGuildId]: invite };
+    state.hostMessage = `${invite.guild_name || "サーバー"} の招待リンクを作成しました。`;
+    openInviteUrl(invite.invite_url, pendingInviteWindow);
+  } catch (error) {
+    closePendingInviteWindow(pendingInviteWindow);
+    state.hostError = error instanceof Error ? error.message : "招待リンクを作成できませんでした。";
+  } finally {
+    state.hostInviteRunning = null;
+    render();
+  }
+}
+
+async function createGuardGuildInvite(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  if (!resolvedGuildId) {
+    return;
+  }
+  if (!getAuthToken()) {
+    state.guard.adminError = "管理者ログインが必要です。";
+    render();
+    return;
+  }
+  state.guard.adminInviteRunning = resolvedGuildId;
+  state.guard.adminError = null;
+  state.guard.adminMessage = null;
+  const pendingInviteWindow = openPendingInviteWindow();
+  render();
+
+  try {
+    const invite = normalizeAdminGuildInvite(await guardCreateAdminGuildInvite(resolvedGuildId));
+    state.guard.adminInviteLinks = { ...state.guard.adminInviteLinks, [resolvedGuildId]: invite };
+    state.guard.adminMessage = `${invite.guild_name || "サーバー"} の招待リンクを作成しました。`;
+    openInviteUrl(invite.invite_url, pendingInviteWindow);
+  } catch (error) {
+    closePendingInviteWindow(pendingInviteWindow);
+    state.guard.adminError = error instanceof Error ? error.message : "招待リンクを作成できませんでした。";
+  } finally {
+    state.guard.adminInviteRunning = null;
+    render();
+  }
+}
+
+function normalizeAdminGuildInvite(invite) {
+  return {
+    guild_id: String(invite?.guild_id ?? ""),
+    guild_name: normalizeNullableString(invite?.guild_name),
+    channel_id: String(invite?.channel_id ?? ""),
+    channel_name: normalizeNullableString(invite?.channel_name),
+    code: String(invite?.code ?? ""),
+    invite_url: String(invite?.invite_url ?? ""),
+    max_age: Number(invite?.max_age ?? 0),
+    max_uses: Number(invite?.max_uses ?? 0),
+    temporary: Boolean(invite?.temporary),
+  };
+}
+
+function openPendingInviteWindow() {
+  try {
+    const inviteWindow = window.open("about:blank", "_blank");
+    if (inviteWindow) {
+      inviteWindow.opener = null;
+    }
+    return inviteWindow;
+  } catch {
+    return null;
+  }
+}
+
+function closePendingInviteWindow(inviteWindow) {
+  try {
+    inviteWindow?.close();
+  } catch {
+    // Ignore browser popup policy errors.
+  }
+}
+
+function openInviteUrl(url, inviteWindow = null) {
+  const inviteUrl = String(url ?? "").trim();
+  if (!inviteUrl) {
+    closePendingInviteWindow(inviteWindow);
+    return;
+  }
+  if (inviteWindow) {
+    inviteWindow.location.href = inviteUrl;
+    return;
+  }
+  window.open(inviteUrl, "_blank", "noopener");
 }
 
 function normalizeDashboardSettings(settings) {
@@ -2396,6 +2539,9 @@ function hasUnsavedChanges() {
 
 function activeGuardDirtyView() {
   const featureId = activeGuardFeature().id;
+  if (featureId === "admin") {
+    return "guardAdmin";
+  }
   if (featureId === "moderation") {
     return "guardModeration";
   }
@@ -2768,6 +2914,8 @@ function resetSessionState() {
   state.hostMessage = null;
   state.hostLoading = false;
   state.hostActionRunning = null;
+  state.hostInviteRunning = null;
+  state.hostInviteLinks = {};
   state.hostLastUpdatedAt = null;
   state.adminPlaylists = [];
   state.adminPlaylistsLoading = false;
@@ -2894,6 +3042,10 @@ function canViewHostAdmin() {
 
 function visibleSettingsPages() {
   return SETTINGS_PAGES.filter((page) => page.view !== "host" || canViewHostAdmin());
+}
+
+function visibleGuardFeatures() {
+  return GUARD_FEATURES.filter((feature) => !feature.adminOnly || canViewHostAdmin());
 }
 
 function defaultServerPageId() {
@@ -3348,6 +3500,22 @@ function guardApiUrl(path) {
   return `${state.guard.apiBase}${path}`;
 }
 
+function guardCreateAdminGuildInvite(guildId) {
+  const token = getAuthToken();
+  if (!token) {
+    return Promise.reject(new Error("管理者ログインが必要です。"));
+  }
+  return guardFetchJson(
+    guardApiUrl(`/admin/guilds/${encodeURIComponent(guildId)}/invite`),
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+}
+
 async function guardFetchJson(url, options = {}) {
   const headers = new Headers(options.headers ?? {});
   const hasBody = options.body !== undefined && options.body !== null;
@@ -3398,7 +3566,7 @@ function normalizeGuardStatus(status) {
     commands_enabled: Boolean(status?.commands_enabled),
     security_log_enabled: status?.security_log_enabled !== false,
     security_log_path: String(status?.security_log_path ?? "database/security_events.jsonl"),
-    guilds: Array.isArray(status?.guilds) ? status.guilds : [],
+    guilds: normalizeBotGuilds(status?.guilds),
   };
 }
 
@@ -3748,7 +3916,10 @@ function guardStatusClass() {
 function renderGuardDashboard() {
   const feature = activeGuardFeature();
   const selectedGuild = activeGuardSelectedGuild();
-  const pageTitle = selectedGuild?.name ?? (guardConfigurableGuilds().length ? "サーバーを選択" : "設定可能なサーバーなし");
+  const pageTitle =
+    feature.id === "admin"
+      ? "BOT詳細"
+      : selectedGuild?.name ?? (guardConfigurableGuilds().length ? "サーバーを選択" : "設定可能なサーバーなし");
   return `
     <div class="dashboard-grid dashboard-grid--guard">
       ${renderGuardGuildList()}
@@ -3769,10 +3940,14 @@ function renderGuardDashboard() {
 }
 
 function activeGuardFeature() {
-  return GUARD_FEATURES.find((feature) => feature.id === state.guard.activeFeature) ?? GUARD_FEATURES[0];
+  const features = visibleGuardFeatures();
+  return features.find((feature) => feature.id === state.guard.activeFeature) ?? features[0] ?? GUARD_FEATURES[0];
 }
 
 function renderGuardFeatureContent(feature) {
+  if (feature?.id === "admin") {
+    return renderGuardHostAdminPanel();
+  }
   if (feature?.id === "verification") {
     return renderGuardVerification();
   }
@@ -3796,7 +3971,7 @@ function renderGuardFunctionSidebar() {
     <aside class="function-sidebar" aria-label="Guard機能メニュー">
       <div class="function-sidebar__label">Guard機能</div>
       <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="Guard機能">
-        ${GUARD_FEATURES.map(renderGuardFunctionNavItem).join("")}
+        ${visibleGuardFeatures().map(renderGuardFunctionNavItem).join("")}
       </div>
     </aside>
   `;
@@ -3884,14 +4059,15 @@ function guardGuildMeta(guild) {
 }
 
 function renderGuardFeatureList() {
+  const features = visibleGuardFeatures();
   return `
     <section class="settings-panel guard-feature-index" aria-label="Guard機能一覧">
       <div class="settings-panel__header">
         <div class="panel-heading">${icon("shield")}<h2>機能一覧</h2></div>
-        <span class="feature-status feature-status--on">${GUARD_FEATURES.length}件</span>
+        <span class="feature-status feature-status--on">${features.length}件</span>
       </div>
       <div class="guard-feature-index__list">
-        ${GUARD_FEATURES.map((feature) => `
+        ${features.map((feature) => `
           <a class="guard-feature-index__item" href="#guard-${escapeAttribute(feature.id)}-settings">
             <span class="guard-feature-index__icon">${icon(feature.icon)}</span>
             <span>
@@ -6433,6 +6609,13 @@ function renderHostAdminPanel() {
               ${renderMetricTile("API起動時間", formatDuration(status.uptime_seconds), `PID ${status.process_id}`, true)}
               ${renderMetricTile("データ空き容量", formatBytes(status.data_dir_free_bytes), `${formatBytes(status.data_dir_used_bytes)} 使用中`, status.data_dir_free_bytes > 0)}
             </div>
+            ${renderAdminGuildAccessPanel({
+              botLabel: "Discat One",
+              guilds: bot?.guilds ?? [],
+              inviteLinks: state.hostInviteLinks,
+              inviteRunningId: state.hostInviteRunning,
+              action: "create-host-guild-invite",
+            })}
             <div class="host-admin__grid">
               <section class="host-card">
                 <div class="host-card__header">
@@ -6515,6 +6698,119 @@ function renderHostAdminPanel() {
       }
     </section>
   `;
+}
+
+function renderGuardHostAdminPanel() {
+  const status = state.guard.status;
+  const user = status.user ?? null;
+  const refreshBusy = state.guard.loading || Boolean(state.guard.adminInviteRunning);
+  return `
+    <section class="settings-panel host-admin" aria-label="Guard BOT管理者用ページ">
+      <div class="settings-panel__header">
+        <div class="panel-heading">
+          ${icon("activity")}<h2>BOT詳細</h2>
+        </div>
+        <div class="host-admin__toolbar">
+          <span class="refresh-pill ${refreshBusy ? "refresh-pill--loading" : ""}">
+            ${icon("radio")}<span>自動更新 ${Math.round(GUARD_STATUS_REFRESH_INTERVAL_MS / 1000)}秒</span><small>${escapeHtml(formatTimeOnly(state.guard.loadedAt))}</small>
+          </span>
+          <button class="icon-button icon-button--primary" type="button" data-action="refresh-guard-admin" ${refreshBusy ? "disabled" : ""}>
+            ${icon("refresh")}<span>${refreshBusy ? "更新中" : "今すぐ更新"}</span>
+          </button>
+        </div>
+      </div>
+      ${renderGuardApiNotice()}
+      ${state.guard.adminError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.adminError)}</span></p>` : ""}
+      ${state.guard.adminMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.adminMessage)}</span></p>` : ""}
+      <div class="host-metrics">
+        ${renderMetricTile("BOT起動時間", formatDuration(status.uptime_seconds), formatDateTime(status.started_at), Boolean(status.online))}
+        ${renderMetricTile("Discord Ping", status.latency_ms == null ? "測定中" : `${status.latency_ms}ms`, `${status.guild_count}サーバー / ${status.member_count}メンバー`, Boolean(status.online))}
+        ${renderMetricTile("API接続", state.guard.source === "api" ? "接続中" : "未接続", state.guard.health?.api_contract_version || "未取得", state.guard.source === "api")}
+        ${renderMetricTile("Security Log", status.security_log_enabled ? "有効" : "無効", status.security_log_path, status.security_log_enabled)}
+      </div>
+      ${renderAdminGuildAccessPanel({
+        botLabel: "Discat Guard",
+        guilds: status.guilds ?? [],
+        inviteLinks: state.guard.adminInviteLinks,
+        inviteRunningId: state.guard.adminInviteRunning,
+        action: "create-guard-guild-invite",
+      })}
+      <div class="host-admin__grid">
+        <section class="host-card">
+          <div class="host-card__header">
+            ${icon("bot")}<h3>BOTランタイム</h3>
+          </div>
+          ${renderDetailList([
+            ["ユーザー", user?.name ?? "未取得"],
+            ["BOT ID", user?.id ?? "未取得"],
+            ["BOT PID", status.process_id ?? "未取得"],
+            ["最終Ready", formatDateTime(status.last_ready_at)],
+            ["最終更新", formatDateTime(status.status_updated_at)],
+            ["コマンド", status.commands_enabled ? "有効" : "無効"],
+          ])}
+        </section>
+        <section class="host-card">
+          <div class="host-card__header">
+            ${icon("shield")}<h3>Guard API</h3>
+          </div>
+          ${renderDetailList([
+            ["API URL", state.guard.apiBase || "未設定"],
+            ["API Contract", state.guard.health?.api_contract_version || "未取得"],
+            ["接続元", state.guard.source],
+            ["取得時刻", formatDateTime(state.guard.loadedAt)],
+            ["認証設定", `${state.guard.verificationSettings.length}件`],
+            ["荒らし対策設定", `${state.guard.moderationSettings.length}件`],
+            ["ログ設定", `${state.guard.loggingSettings.length}件`],
+          ])}
+        </section>
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminGuildAccessPanel({ botLabel, guilds, inviteLinks, inviteRunningId, action }) {
+  const normalizedGuilds = normalizeBotGuilds(guilds);
+  const body = normalizedGuilds.length
+    ? `<div class="admin-guild-list">${normalizedGuilds.map((guild) => renderAdminGuildRow(guild, { inviteLinks, inviteRunningId, action })).join("")}</div>`
+    : `<div class="empty-state">${escapeHtml(botLabel)} が参加しているサーバーはまだ取得されていません。</div>`;
+  return `
+    <section class="host-card admin-guilds">
+      <div class="host-card__header">
+        ${icon("server")}<h3>参加サーバー</h3>
+        <span class="feature-status ${normalizedGuilds.length ? "feature-status--on" : ""}">
+          ${escapeHtml(`${normalizedGuilds.length}件`)}
+        </span>
+      </div>
+      ${body}
+    </section>
+  `;
+}
+
+function renderAdminGuildRow(guild, { inviteLinks, inviteRunningId, action }) {
+  const invite = inviteLinks?.[guild.id] ?? null;
+  const running = inviteRunningId === guild.id;
+  const memberLabel = guild.member_count == null ? "members unknown" : `${formatCompactNumber(guild.member_count)} members`;
+  return `
+    <article class="admin-guild-row">
+      ${renderAdminGuildIcon(guild)}
+      <div class="admin-guild-row__body">
+        <strong>${escapeHtml(guild.name)}</strong>
+        <small>${escapeHtml(memberLabel)} / joined ${escapeHtml(formatDateTime(guild.joined_at))}</small>
+        <code>${escapeHtml(guild.id)}</code>
+        ${invite?.invite_url ? `<a href="${escapeAttribute(invite.invite_url)}" target="_blank" rel="noreferrer">${escapeHtml(invite.invite_url)}</a>` : ""}
+      </div>
+      <button class="icon-button icon-button--ghost admin-guild-row__invite" type="button" data-action="${escapeAttribute(action)}" data-admin-guild-id="${escapeAttribute(guild.id)}" ${running ? "disabled" : ""}>
+        ${icon(running ? "refresh" : "link")}<span>${running ? "作成中" : "招待リンク作成"}</span>
+      </button>
+    </article>
+  `;
+}
+
+function renderAdminGuildIcon(guild) {
+  if (guild.icon_url) {
+    return `<img class="admin-guild-row__icon" src="${escapeAttribute(guild.icon_url)}" alt="" />`;
+  }
+  return `<span class="admin-guild-row__icon admin-guild-row__icon--fallback">${escapeHtml((guild.name || "?").slice(0, 1))}</span>`;
 }
 
 function renderAdminPlaylistsPanel() {
@@ -6927,7 +7223,7 @@ function requestPageChange(pageId) {
 }
 
 function requestGuardFeatureChange(featureId) {
-  if (!GUARD_FEATURES.some((feature) => feature.id === featureId)) {
+  if (!visibleGuardFeatures().some((feature) => feature.id === featureId)) {
     return;
   }
   if (featureId === state.guard.activeFeature) {
@@ -7174,6 +7470,8 @@ function handleClick(event) {
       void refreshServiceStatus();
     } else if (action === "refresh-host") {
       void loadHostAdminData();
+    } else if (action === "refresh-guard-admin") {
+      void loadGuardData();
     } else if (action === "reload-guild-data") {
       if (state.selectedGuildId) {
         void loadGuildData(state.selectedGuildId);
@@ -7208,6 +7506,16 @@ function handleClick(event) {
       const hostAction = actionEl.dataset.hostAction;
       if (hostAction) {
         void runHostAction(hostAction);
+      }
+    } else if (action === "create-host-guild-invite") {
+      const guildId = actionEl.dataset.adminGuildId;
+      if (guildId) {
+        void createHostGuildInvite(guildId);
+      }
+    } else if (action === "create-guard-guild-invite") {
+      const guildId = actionEl.dataset.adminGuildId;
+      if (guildId) {
+        void createGuardGuildInvite(guildId);
       }
     } else if (action === "toggle-guild-list") {
       state.guildListCollapsed = !state.guildListCollapsed;
