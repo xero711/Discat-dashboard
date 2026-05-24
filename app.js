@@ -235,7 +235,7 @@ const GUARD_FEATURES = [
   {
     id: "logging",
     label: "ログ機能",
-    description: "参加、BAN、招待、ロール、チャンネル、VC、メッセージなどのログ送信先を設定します。",
+    description: "参加、BAN、招待、ロール、チャンネル、VC状態、メッセージなどのログ送信先を設定します。",
     help: "イベントごとに有効化とログを送るチャンネルを設定します。",
     icon: "activity",
   },
@@ -441,6 +441,60 @@ const GUARD_LOGGING_EVENTS = [
     label: "VC退室",
     description: "メンバーがボイスチャンネルから退室した時に送信します。",
     icon: "radio",
+  },
+  {
+    id: "voice_moved",
+    label: "VC移動",
+    description: "メンバーが別のボイスチャンネルへ移動した時に送信します。",
+    icon: "radio",
+  },
+  {
+    id: "voice_screen_share_changed",
+    label: "VC画面共有",
+    description: "メンバーが画面共有を開始または終了した時に送信します。",
+    icon: "monitor",
+  },
+  {
+    id: "voice_self_mute_changed",
+    label: "VCセルフミュート",
+    description: "メンバーが自分のマイクミュートを切り替えた時に送信します。",
+    icon: "volume",
+  },
+  {
+    id: "voice_server_mute_changed",
+    label: "VCサーバーミュート",
+    description: "メンバーのサーバーミュートが切り替わった時に送信します。",
+    icon: "alert",
+  },
+  {
+    id: "voice_self_deaf_changed",
+    label: "VCセルフスピーカーミュート",
+    description: "メンバーが自分のスピーカーミュートを切り替えた時に送信します。",
+    icon: "volume",
+  },
+  {
+    id: "voice_server_deaf_changed",
+    label: "VCサーバースピーカーミュート",
+    description: "メンバーのサーバースピーカーミュートが切り替わった時に送信します。",
+    icon: "alert",
+  },
+  {
+    id: "voice_video_changed",
+    label: "VCカメラ",
+    description: "メンバーがカメラを開始または終了した時に送信します。",
+    icon: "monitor",
+  },
+  {
+    id: "voice_suppressed_changed",
+    label: "VC発言抑制",
+    description: "ステージチャンネルで発言抑制が切り替わった時に送信します。",
+    icon: "lock",
+  },
+  {
+    id: "voice_request_to_speak_changed",
+    label: "VCスピーカー申請",
+    description: "ステージチャンネルでスピーカー申請が切り替わった時に送信します。",
+    icon: "user",
   },
   {
     id: "message_deleted",
@@ -4609,7 +4663,7 @@ function renderGuardLogging() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("activity")}<span>参加、BAN、招待、ロール、チャンネル、VC、メッセージなどのログ送信先をイベントごとに設定します。</span>
+        ${icon("activity")}<span>参加、BAN、招待、ロール、チャンネル、VC入退室・移動・状態変更、メッセージなどのログ送信先をイベントごとに設定します。</span>
       </div>
       ${state.guard.loggingError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.loggingError)}</span></p>` : ""}
       ${state.guard.loggingMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.loggingMessage)}</span></p>` : ""}
