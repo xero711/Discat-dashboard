@@ -174,10 +174,10 @@ const SETTINGS_PAGES = [
   },
   {
     id: "bump-rank",
-    label: "Bumpランク",
+    label: "Bump/Upランク",
     eyebrow: "掲示板",
-    description: "DISBOARD通知とランキング",
-    help: "DISBOARDの/bump成功を検知し、2時間後の再実行通知、ランク、定期ランキング送信を管理します。",
+    description: "掲示板通知とランキング",
+    help: "DISBOARDの/bumpとディス速の/up成功を検知し、2時間後の再実行通知、ランク、定期ランキング送信を管理します。",
     icon: "activity",
     view: "features",
   },
@@ -6521,10 +6521,10 @@ function renderBumpRankSettings(textChannels, roles) {
   const enabled = Boolean(settings.channel_id && settings.role_id);
   const resetEnabled = settings.reset_interval !== "none";
   return `
-    <section class="feature-card" aria-label="Bumpランク">
+    <section class="feature-card" aria-label="Bump/Upランク">
       <div class="feature-card__header">
         <div class="panel-heading">
-          ${icon("activity")}<h2>Bumpランク</h2>
+          ${icon("activity")}<h2>Bump/Upランク</h2>
         </div>
         <span class="feature-status ${enabled ? "feature-status--on" : ""}">
           ${enabled ? "有効" : "未設定"}
@@ -6568,11 +6568,11 @@ function renderBumpRankSettings(textChannels, roles) {
         </div>
       </div>
       <div class="settings-panel__footer">
-        ${icon("info")}<span>DISBOARDの/bump成功を検知すると2時間後に再通知し、リセット時に期間内ランキングを送信します。</span>
+        ${icon("info")}<span>DISBOARDの/bumpとディス速の/up成功を検知すると2時間後に再通知し、リセット時に期間内ランキングを送信します。</span>
       </div>
       <div class="feature-card__actions">
         <button class="icon-button icon-button--ghost" type="button" data-action="clear-bump-rank">
-          ${icon("trash")}<span>Bumpランクを解除</span>
+          ${icon("trash")}<span>Bump/Upランクを解除</span>
         </button>
       </div>
     </section>
