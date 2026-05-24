@@ -522,6 +522,9 @@ const state = {
   playlistError: null,
   playlistMessage: null,
   playlistUrl: "",
+  playlistSearchLoading: false,
+  playlistSearchResults: [],
+  playlistSearchQuery: "",
   playlistDragActive: false,
   userActivity: null,
   userActivityLoading: false,
@@ -1224,6 +1227,12 @@ const api = {
   featureSettings: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/feature-settings`),
   ttsOptions: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/tts-options`),
   playlist: () => request("/playlist/me"),
+  searchPlaylistTracks: (query) =>
+    request(
+      `/playlist/tracks/search?q=${encodeURIComponent(query)}`,
+      {},
+      { timeoutMs: 90000 },
+    ),
   addPlaylistUrl: (url) =>
     request(
       "/playlist/tracks/url",
@@ -1765,10 +1774,55 @@ async function sendSupportInquiry() {
   }
 }
 
-async function addPlaylistUrl() {
-  const url = state.playlistUrl.trim();
-  if (!url) {
-    state.playlistError = "YouTubeなどのURLを入力してください。";
+async function submitPlaylistInput() {
+  const input = state.playlistUrl.trim();
+  if (!input) {
+    state.playlistError = "曲名または音楽サービスのURLを入力してください。";
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+
+  if (isHttpUrl(input)) {
+    await addPlaylistUrl(input, { clearInput: true, clearSearch: true });
+    return;
+  }
+
+  await searchPlaylistTracks(input);
+}
+
+async function searchPlaylistTracks(query = state.playlistUrl.trim()) {
+  const cleanedQuery = query.trim();
+  if (!cleanedQuery) {
+    state.playlistError = "検索する曲名を入力してください。";
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+  state.playlistSearchLoading = true;
+  state.playlistError = null;
+  state.playlistMessage = null;
+  state.playlistSearchQuery = cleanedQuery;
+  state.playlistSearchResults = [];
+  render();
+  try {
+    const results = await api.searchPlaylistTracks(cleanedQuery);
+    state.playlistSearchResults = normalizePlaylistSearchResults(results);
+    if (!state.playlistSearchResults.length) {
+      state.playlistError = "該当する曲が見つかりませんでした。曲名やアーティスト名を変えて検索してください。";
+    }
+  } catch (error) {
+    state.playlistError = error instanceof Error ? error.message : "曲名検索に失敗しました。";
+  } finally {
+    state.playlistSearchLoading = false;
+    render();
+  }
+}
+
+async function addPlaylistUrl(url = state.playlistUrl.trim(), options = {}) {
+  const cleanedUrl = url.trim();
+  if (!cleanedUrl) {
+    state.playlistError = "追加するURLを指定してください。";
     state.playlistMessage = null;
     render();
     return;
@@ -1778,15 +1832,26 @@ async function addPlaylistUrl() {
   state.playlistMessage = null;
   render();
   try {
-    const playlist = await api.addPlaylistUrl(url);
+    const playlist = await api.addPlaylistUrl(cleanedUrl);
     state.playlist = normalizePlaylist(playlist);
-    state.playlistUrl = "";
+    state.playlistMessage = "プレイリストに追加しました。";
+    if (options.clearInput) {
+      state.playlistUrl = "";
+    }
+    if (options.clearSearch) {
+      state.playlistSearchResults = [];
+      state.playlistSearchQuery = "";
+    }
   } catch (error) {
     state.playlistError = error instanceof Error ? error.message : "URLの登録に失敗しました。";
   } finally {
     state.playlistSaving = false;
     render();
   }
+}
+
+async function addPlaylistSearchResult(url) {
+  await addPlaylistUrl(url, { clearInput: true, clearSearch: true });
 }
 
 async function uploadPlaylistFile(file) {
@@ -1842,6 +1907,10 @@ function readFileAsBase64(file) {
     reader.addEventListener("error", () => reject(new Error("ファイルを読み取れませんでした。")));
     reader.readAsDataURL(file);
   });
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(String(value ?? "").trim());
 }
 
 function normalizeHostStatus(status) {
@@ -2204,6 +2273,20 @@ function normalizePlaylist(playlist) {
     tracks: Array.isArray(playlist?.tracks) ? playlist.tracks.map(normalizePlaylistTrack) : [],
     updated_at: playlist?.updated_at ?? null,
   };
+}
+
+function normalizePlaylistSearchResults(results) {
+  return Array.isArray(results)
+    ? results
+        .map((result) => ({
+          title: String(result?.title ?? "Untitled"),
+          webpage_url: normalizeNullableString(result?.webpage_url),
+          duration: Number.isFinite(Number(result?.duration)) ? Number(result.duration) : null,
+          thumbnail: normalizeNullableString(result?.thumbnail),
+          source_label: normalizeNullableString(result?.source_label) || "YouTube",
+        }))
+        .filter((result) => result.webpage_url)
+    : [];
 }
 
 function normalizeAdminPlaylists(playlists) {
@@ -2926,6 +3009,9 @@ function resetSessionState() {
   state.playlistError = null;
   state.playlistMessage = null;
   state.playlistUrl = "";
+  state.playlistSearchLoading = false;
+  state.playlistSearchResults = [];
+  state.playlistSearchQuery = "";
   state.playlistDragActive = false;
   state.userActivity = null;
   state.userActivityLoading = false;
@@ -5719,13 +5805,14 @@ function renderPlaylistPanel(playlist) {
       ${renderPlaylistSpotlight(tracks)}
       <form class="playlist-url-form" data-playlist-url-form>
         <label class="field playlist-url-form__field">
-          <span>YouTube URL</span>
-          <input type="url" value="${escapeAttribute(state.playlistUrl)}" placeholder="https://www.youtube.com/watch?v=..." data-playlist-field="url" ${state.playlistSaving ? "disabled" : ""} />
+          <span>曲名または音楽サービスURL</span>
+          <input type="text" value="${escapeAttribute(state.playlistUrl)}" placeholder="曲名 / Spotify・Apple Music・Amazon Music・SoundCloud URL" data-playlist-field="url" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""} />
         </label>
-        <button class="icon-button icon-button--primary" type="submit" ${state.playlistSaving ? "disabled" : ""}>
-          ${icon("link")}<span>${state.playlistSaving ? "登録中" : "URL登録"}</span>
+        <button class="icon-button icon-button--primary" type="submit" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""}>
+          ${icon(isHttpUrl(state.playlistUrl) ? "link" : "search")}<span>${state.playlistSaving ? "登録中" : state.playlistSearchLoading ? "検索中" : "検索 / 登録"}</span>
         </button>
       </form>
+      ${renderPlaylistSearchResults()}
       <div class="playlist-drop-zone ${state.playlistDragActive ? "playlist-drop-zone--active" : ""}" data-playlist-drop-zone>
         <input type="file" accept="audio/mpeg,.mp3" data-playlist-file-input hidden />
         <div>
@@ -5741,10 +5828,50 @@ function renderPlaylistPanel(playlist) {
         ${
           tracks.length
             ? tracks.map(renderPlaylistTrack).join("")
-            : `<div class="empty-state">登録曲はまだありません。URL登録またはmp3アップロードで追加できます。</div>`
+            : `<div class="empty-state">登録曲はまだありません。曲名検索、音楽サービスURL、mp3アップロードで追加できます。</div>`
         }
       </div>
     </section>
+  `;
+}
+
+function renderPlaylistSearchResults() {
+  const results = state.playlistSearchResults ?? [];
+  if (state.playlistSearchLoading) {
+    return `<div class="playlist-search-results"><div class="empty-state">曲名から候補を検索しています。</div></div>`;
+  }
+  if (!results.length) {
+    return "";
+  }
+  return `
+    <div class="playlist-search-results" aria-live="polite">
+      <div class="playlist-search-results__header">
+        <span>検索結果</span>
+        <strong>${escapeHtml(state.playlistSearchQuery || "曲名検索")}</strong>
+      </div>
+      <div class="playlist-search-results__list">
+        ${results.map(renderPlaylistSearchResult).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlaylistSearchResult(result) {
+  const escapedUrl = escapeAttribute(result.webpage_url);
+  const escapedTitle = escapeAttribute(result.title);
+  return `
+    <article class="playlist-search-result">
+      <div class="playlist-search-result__thumb" aria-hidden="true">
+        ${result.thumbnail ? `<img src="${escapeAttribute(result.thumbnail)}" alt="" />` : icon("music")}
+      </div>
+      <div class="playlist-search-result__body">
+        <strong>${escapeHtml(result.title)}</strong>
+        <span>${escapeHtml(result.source_label)} / ${escapeHtml(formatDuration(result.duration))}</span>
+      </div>
+      <button class="icon-button icon-button--ghost playlist-search-result__add" type="button" data-action="playlist-add-search-result" data-track-url="${escapedUrl}" title="${escapedTitle}を追加" ${state.playlistSaving ? "disabled" : ""}>
+        ${icon("plus")}<span>追加</span>
+      </button>
+    </article>
   `;
 }
 
@@ -5757,12 +5884,13 @@ function renderPlaylistSpotlight(tracks) {
       </div>
       <div class="playlist-spotlight__copy">
         <span>Discat One Playlist</span>
-        <strong>URLもmp3もまとめて、すぐ再生できる曲リストに</strong>
-        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "YouTube URLかmp3を追加すると、ここに自分の曲が並びます。")}</p>
+        <strong>曲名検索もサービスURLも、すぐ再生できる曲リストに</strong>
+        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "曲名検索、SpotifyなどのURL、mp3を追加すると、ここに自分の曲が並びます。")}</p>
         <div class="playlist-spotlight__chips" aria-label="対応している登録方法">
-          <span>${icon("link")}URL登録</span>
+          <span>${icon("search")}曲名検索</span>
+          <span>${icon("link")}Spotify / Apple</span>
+          <span>${icon("link")}Amazon / SoundCloud</span>
           <span>${icon("upload")}mp3対応</span>
-          <span>${icon("play")}プレビュー</span>
         </div>
       </div>
       <div class="playlist-spotlight__stat">
@@ -7333,7 +7461,7 @@ function handleSubmit(event) {
     void sendSupportInquiry();
   } else if (target instanceof HTMLFormElement && target.matches("[data-playlist-url-form]")) {
     event.preventDefault();
-    void addPlaylistUrl();
+    void submitPlaylistInput();
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-verification-form]")) {
     event.preventDefault();
     void saveGuardVerificationSettings();
@@ -7481,7 +7609,12 @@ function handleClick(event) {
     } else if (action === "user-activity-refresh") {
       void loadUserActivity();
     } else if (action === "playlist-add-url") {
-      void addPlaylistUrl();
+      void submitPlaylistInput();
+    } else if (action === "playlist-add-search-result") {
+      const trackUrl = actionEl.dataset.trackUrl;
+      if (trackUrl) {
+        void addPlaylistSearchResult(trackUrl);
+      }
     } else if (action === "playlist-choose-file") {
       const input = root.querySelector("[data-playlist-file-input]");
       if (input instanceof HTMLInputElement) {
@@ -8210,6 +8343,7 @@ function icon(name, label = "") {
     refresh: '<path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.7-2.7L3 16"/><path d="M3 21v-5h5"/><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.7 2.7L21 8"/><path d="M21 3v5h-5"/>',
     router: '<rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6.5 18h.01"/><path d="M10.5 18h.01"/><path d="M15 14v-4"/><path d="M12 10h6"/><path d="M12 6h6"/>',
     save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
     server: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
     settings: '<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 .9-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1A1.7 1.7 0 0 0 21 10h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
     shield: '<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3Z"/><path d="m9 12 2 2 4-4"/>',
