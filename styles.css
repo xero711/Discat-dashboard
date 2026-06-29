@@ -404,6 +404,7 @@ body.body--guard.body--status-only .app-shell--guard {
 }
 
 .dashboard-grid {
+  --side-panel-top-offset: calc(61px + clamp(1.674rem, 3.24vw, 2.646rem));
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   grid-template-areas: "workspace guild-list";
@@ -429,8 +430,7 @@ body.body--guard.body--status-only .app-shell--guard {
 
 .guild-list {
   grid-area: guild-list;
-  position: sticky;
-  top: 16px;
+  margin-top: var(--side-panel-top-offset);
   padding: 14px;
 }
 
@@ -639,12 +639,12 @@ body.body--guard.body--status-only .app-shell--guard {
 }
 
 .function-sidebar {
-  position: sticky;
-  top: 16px;
+  position: relative;
   z-index: 10;
   display: grid;
   gap: 14px;
-  max-height: calc(100vh - 32px);
+  margin-top: var(--side-panel-top-offset);
+  max-height: none;
   overflow: visible;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4938,6 +4938,7 @@ input[type="checkbox"]:checked::before {
   }
 
   .guild-list {
+    margin-top: 0;
     position: static;
   }
 
@@ -4999,6 +5000,7 @@ input[type="checkbox"]:checked::before {
   }
 
   .function-sidebar {
+    margin-top: 0;
     position: static;
     max-height: none;
     overflow: visible;
