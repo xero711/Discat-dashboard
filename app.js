@@ -6879,7 +6879,6 @@ function renderBumpRankSettings(textChannels, roles) {
           <span>次回Bump</span>
           <strong>${escapeHtml(settings.next_bump_at ? formatDateTime(settings.next_bump_at) : "未検知")}</strong>
         </div>
-        ${renderActiveRankingSourceSettings(settings)}
       </div>
       <div class="settings-panel__footer">
         ${icon("info")}<span>DISBOARDの/bumpとディス速の/up成功を検知すると2時間後に再通知し、リセット時に期間内ランキングを送信します。</span>
