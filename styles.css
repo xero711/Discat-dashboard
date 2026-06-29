@@ -1025,6 +1025,102 @@ body.body--guard.body--status-only .app-shell--guard {
   font-size: 0.98rem;
 }
 
+.active-ranking-settings {
+  align-content: start;
+}
+
+.active-ranking-source-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.active-ranking-source {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.13);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.active-ranking-source input {
+  grid-row: span 2;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--success);
+}
+
+.active-ranking-source strong {
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  font-weight: 820;
+}
+
+.active-ranking-source small {
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+
+.active-ranking-source--selected {
+  border-color: rgba(117, 245, 186, 0.36);
+  background: rgba(117, 245, 186, 0.08);
+}
+
+.server-rank-card {
+  border-color: rgba(117, 245, 186, 0.24);
+  background:
+    linear-gradient(135deg, rgba(117, 245, 186, 0.075), rgba(111, 232, 255, 0.045)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.server-rank-settings-grid {
+  align-items: stretch;
+}
+
+.server-rank-point-rules {
+  align-content: start;
+}
+
+.server-rank-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.server-rank-rule {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.13);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.server-rank-rule strong {
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  font-weight: 820;
+}
+
+.server-rank-rule span {
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+
+.server-rank-rule--active {
+  border-color: rgba(111, 232, 255, 0.34);
+  background: rgba(111, 232, 255, 0.075);
+}
+
 .welcome-message-toggle {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 46px;
@@ -1671,6 +1767,11 @@ body.body--guard.body--status-only .app-shell--guard {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.activity-period-tabs--wide {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: min(100%, 340px);
+}
+
 .activity-period-tab {
   min-height: 34px;
   border: 1px solid transparent;
@@ -1790,6 +1891,127 @@ body.body--guard.body--status-only .app-shell--guard {
 
 .activity-line--characters {
   stroke: var(--success);
+}
+
+.guild-ranking-panel {
+  gap: 12px;
+}
+
+.active-ranking-source-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.active-ranking-source-summary span {
+  border: 1px solid rgba(117, 245, 186, 0.24);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(117, 245, 186, 0.08);
+  color: var(--text-strong);
+  font-size: 0.74rem;
+  font-weight: 780;
+}
+
+.guild-ranking-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ranking-board {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.12);
+  border-radius: 8px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(17, 9, 30, 0.2)),
+    rgba(255, 255, 255, 0.032);
+}
+
+.ranking-board:first-child {
+  grid-column: 1 / -1;
+  border-color: rgba(117, 245, 186, 0.26);
+  background:
+    linear-gradient(135deg, rgba(117, 245, 186, 0.08), rgba(111, 232, 255, 0.06)),
+    rgba(255, 255, 255, 0.035);
+}
+
+.ranking-board__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ranking-board__header span {
+  color: var(--text-strong);
+  font-size: 0.92rem;
+  font-weight: 840;
+}
+
+.ranking-board__header strong {
+  color: var(--muted-2);
+  font-size: 0.75rem;
+  font-weight: 760;
+}
+
+.ranking-board__list {
+  display: grid;
+  gap: 8px;
+}
+
+.ranking-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(74px, auto);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.1);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.ranking-row__rank {
+  color: var(--success);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 820;
+}
+
+.ranking-row__user {
+  display: grid;
+  min-width: 0;
+}
+
+.ranking-row__user strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-row__user small {
+  overflow: hidden;
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ranking-row__value {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 820;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .activity-metric-card__footer {
@@ -4444,6 +4666,9 @@ input[type="checkbox"]:checked::before {
   .guard-feature-index__list,
   .user-page__grid,
   .activity-metric-grid,
+  .active-ranking-source-options,
+  .server-rank-rule-grid,
+  .guild-ranking-grid,
   .playlist-url-form,
   .auto-rule-row,
   .dictionary-row,
@@ -4537,6 +4762,19 @@ input[type="checkbox"]:checked::before {
   .activity-range-summary {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .ranking-board:first-child {
+    grid-column: auto;
+  }
+
+  .ranking-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .ranking-row__value {
+    grid-column: 2;
+    text-align: left;
   }
 
   .tts-engine-status {

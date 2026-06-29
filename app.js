@@ -91,6 +91,19 @@ const ACTIVITY_POINT_LIMITS = {
   weekly: 8,
   monthly: 6,
 };
+const RANKING_PERIODS = [
+  { id: "daily", label: "日", summary: "今日" },
+  { id: "weekly", label: "週", summary: "今週" },
+  { id: "monthly", label: "月", summary: "今月" },
+  { id: "yearly", label: "年", summary: "今年" },
+];
+const ACTIVE_RANKING_SOURCES = [
+  { id: "text", label: "テキスト", metric: "文字数" },
+  { id: "message", label: "メッセージ", metric: "送信数" },
+  { id: "vc", label: "VC", metric: "接続時間" },
+  { id: "bump", label: "BUMP", metric: "Bump/Up" },
+];
+const DEFAULT_ACTIVE_RANKING_SOURCES = ["message", "text", "vc", "bump"];
 const BUMP_RANK_RESET_INTERVALS = [
   { id: "none", label: "リセットしない" },
   { id: "daily", label: "毎日" },
@@ -170,6 +183,15 @@ const SETTINGS_PAGES = [
     description: "参加通知とロール",
     help: "案内メッセージにリアクションしたユーザーへ、VC参加時の通知ロールで知らせます。",
     icon: "bell",
+    view: "features",
+  },
+  {
+    id: "server-rank",
+    label: "サーバーランク",
+    eyebrow: "ランキング",
+    description: "統合ポイントと表示",
+    help: "テキスト、メッセージ、VC、BUMPのどれをサーバーアクティブランキングへ加算するかを設定し、期間別ランキングを確認します。",
+    icon: "activity",
     view: "features",
   },
   {
@@ -584,6 +606,10 @@ const state = {
   userActivityLoading: false,
   userActivityError: null,
   activeActivityPeriod: "daily",
+  guildRankings: null,
+  guildRankingsLoading: false,
+  guildRankingsError: null,
+  activeRankingPeriod: "daily",
   activeUserPanelTab: "playlist",
   support: createDefaultSupportState(),
   security: {
@@ -674,6 +700,7 @@ const state = {
     serviceStatus: 0,
     playlist: 0,
     activity: 0,
+    rankings: 0,
     guard: 0,
     guildOptions: 0,
   },
@@ -1279,6 +1306,8 @@ const api = {
   guilds: () => request("/guilds"),
   settings: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/settings`),
   featureSettings: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/feature-settings`),
+  guildRankings: (guildId, period) =>
+    request(`/guilds/${encodeURIComponent(guildId)}/rankings?period=${encodeURIComponent(period)}`),
   ttsOptions: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/tts-options`),
   playlist: () => request("/playlist/me"),
   searchPlaylistTracks: (query) =>
@@ -1472,16 +1501,21 @@ async function loadGuildData(guildId) {
   state.guildDataError = null;
   state.ttsOptions = null;
   state.featureSettings = null;
+  state.guildRankings = null;
+  state.guildRankingsLoading = false;
+  state.guildRankingsError = null;
   state.savedSettings = null;
   state.savedFeatureSettings = null;
   resetDirtyViews();
   render();
 
   try {
-    const [settings, options, featureSettings] = await Promise.all([
+    const rankingPeriod = normalizedRankingPeriod();
+    const [settings, options, featureSettings, guildRankings] = await Promise.all([
       api.settings(guildId),
       api.ttsOptions(guildId),
       api.featureSettings(guildId),
+      api.guildRankings(guildId, rankingPeriod),
     ]);
     if (requestId !== state.requestIds.guildData) {
       return;
@@ -1490,6 +1524,7 @@ async function loadGuildData(guildId) {
     state.ttsOptions = options;
     guildOptionsRenderPending = false;
     rememberSavedFeatureSettings(featureSettings);
+    state.guildRankings = normalizeGuildRankings(guildRankings);
     render();
   } catch (error) {
     if (requestId !== state.requestIds.guildData) {
@@ -1757,6 +1792,35 @@ async function loadUserActivity(options = {}) {
   } finally {
     if (requestId === state.requestIds.activity) {
       state.userActivityLoading = false;
+      render();
+    }
+  }
+}
+
+async function loadGuildRankings(guildId = state.selectedGuildId, options = {}) {
+  if (!guildId) {
+    return;
+  }
+  const requestId = state.requestIds.rankings + 1;
+  state.requestIds.rankings = requestId;
+  state.guildRankingsLoading = !options.silent;
+  state.guildRankingsError = null;
+  render();
+
+  try {
+    const rankings = await api.guildRankings(guildId, normalizedRankingPeriod());
+    if (requestId !== state.requestIds.rankings) {
+      return;
+    }
+    state.guildRankings = normalizeGuildRankings(rankings);
+  } catch (error) {
+    if (requestId !== state.requestIds.rankings) {
+      return;
+    }
+    state.guildRankingsError = error instanceof Error ? error.message : "ランキングを取得できませんでした。";
+  } finally {
+    if (requestId === state.requestIds.rankings) {
+      state.guildRankingsLoading = false;
       render();
     }
   }
@@ -2390,6 +2454,68 @@ function normalizeUserActivityPoint(point) {
   };
 }
 
+function normalizeGuildRankings(rankings) {
+  const period = normalizeRankingPeriod(rankings?.period ?? state.activeRankingPeriod);
+  return {
+    guild_id: String(rankings?.guild_id ?? state.selectedGuildId ?? ""),
+    generated_at: normalizeNullableString(rankings?.generated_at),
+    period,
+    start_date: String(rankings?.start_date ?? ""),
+    end_date: String(rankings?.end_date ?? ""),
+    active_sources: normalizeActiveRankingSources(rankings?.active_sources),
+    active: normalizeGuildRankingEntries(rankings?.active),
+    text: normalizeGuildRankingEntries(rankings?.text),
+    message: normalizeGuildRankingEntries(rankings?.message),
+    vc: normalizeGuildRankingEntries(rankings?.vc),
+    bump: normalizeGuildRankingEntries(rankings?.bump),
+  };
+}
+
+function normalizeGuildRankingEntries(entries) {
+  return Array.isArray(entries)
+    ? entries.map(normalizeGuildRankingEntry).filter((entry) => entry.user_id && entry.points > 0)
+    : [];
+}
+
+function normalizeGuildRankingEntry(entry) {
+  return {
+    rank: Math.max(0, Math.trunc(Number(entry?.rank) || 0)),
+    user_id: String(entry?.user_id ?? ""),
+    display_name: normalizeNullableString(entry?.display_name),
+    points: Math.max(0, Math.trunc(Number(entry?.points) || 0)),
+    message_count: Math.max(0, Math.trunc(Number(entry?.message_count) || 0)),
+    character_count: Math.max(0, Math.trunc(Number(entry?.character_count) || 0)),
+    vc_seconds: Math.max(0, Math.trunc(Number(entry?.vc_seconds) || 0)),
+    bump_count: Math.max(0, Math.trunc(Number(entry?.bump_count) || 0)),
+  };
+}
+
+function normalizeActiveRankingSources(sources) {
+  if (!Array.isArray(sources)) {
+    return [...DEFAULT_ACTIVE_RANKING_SOURCES];
+  }
+  const selected = [];
+  for (const source of sources) {
+    const id = String(source ?? "").trim();
+    if (ACTIVE_RANKING_SOURCES.some((item) => item.id === id) && !selected.includes(id)) {
+      selected.push(id);
+    }
+  }
+  return selected;
+}
+
+function sameStringList(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
+}
+
+function normalizeRankingPeriod(value) {
+  const period = String(value ?? "daily");
+  return RANKING_PERIODS.some((item) => item.id === period) ? period : "daily";
+}
+
 function normalizePlaylistTrack(track) {
   return {
     id: String(track?.id ?? ""),
@@ -2428,6 +2554,7 @@ function normalizeBumpRankSettings(settings) {
     role_id: normalizeNullableString(settings?.role_id) ?? "",
     reset_interval: normalizeBumpRankResetInterval(settings?.reset_interval),
     ranking_channel_id: normalizeNullableString(settings?.ranking_channel_id) ?? "",
+    active_ranking_sources: normalizeActiveRankingSources(settings?.active_ranking_sources),
     total_bumps: Math.max(0, Math.trunc(Number(settings?.total_bumps) || 0)),
     next_bump_at: normalizeNullableString(settings?.next_bump_at),
     last_bump_at: normalizeNullableString(settings?.last_bump_at),
@@ -5736,11 +5863,13 @@ function supportProgress() {
 
 function comparableBumpRankSettings(settings) {
   const normalized = normalizeBumpRankSettings(settings);
+  const sourcesChanged = !sameStringList(normalized.active_ranking_sources, DEFAULT_ACTIVE_RANKING_SOURCES);
   const hasAnyValue = Boolean(
     normalized.channel_id
       || normalized.role_id
       || normalized.ranking_channel_id
-      || normalized.reset_interval !== "none",
+      || normalized.reset_interval !== "none"
+      || sourcesChanged,
   );
   if (!hasAnyValue) {
     return null;
@@ -5750,6 +5879,7 @@ function comparableBumpRankSettings(settings) {
     role_id: normalizeNullableString(normalized.role_id),
     reset_interval: normalized.reset_interval,
     ranking_channel_id: normalizeNullableString(normalized.ranking_channel_id),
+    active_ranking_sources: normalized.active_ranking_sources,
   };
 }
 
@@ -6476,6 +6606,7 @@ function renderFeatureSettingsForm() {
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
+    "server-rank": () => renderServerRankSettings(textChannels, roles),
     "bump-rank": () => renderBumpRankSettings(textChannels, roles),
   }[page.id]?.() ?? renderGlobalChatSettings(textChannels);
 
@@ -6748,6 +6879,7 @@ function renderBumpRankSettings(textChannels, roles) {
           <span>次回Bump</span>
           <strong>${escapeHtml(settings.next_bump_at ? formatDateTime(settings.next_bump_at) : "未検知")}</strong>
         </div>
+        ${renderActiveRankingSourceSettings(settings)}
       </div>
       <div class="settings-panel__footer">
         ${icon("info")}<span>DISBOARDの/bumpとディス速の/up成功を検知すると2時間後に再通知し、リセット時に期間内ランキングを送信します。</span>
@@ -6758,7 +6890,311 @@ function renderBumpRankSettings(textChannels, roles) {
         </button>
       </div>
     </section>
+    ${renderGuildRankingsPanel()}
   `;
+}
+
+function renderServerRankSettings(textChannels, roles) {
+  const settings = normalizeBumpRankSettings(state.featureSettings.bump_rank);
+  const selectedChannel = textChannels.find((channel) => channel.id === settings.channel_id);
+  const selectedRankingChannel = textChannels.find((channel) => channel.id === settings.ranking_channel_id);
+  const selectedRole = roles.find((role) => role.id === settings.role_id);
+  const selectedSources = normalizeActiveRankingSources(settings.active_ranking_sources);
+  const resetEnabled = settings.reset_interval !== "none";
+  return `
+    <section class="feature-card server-rank-card" aria-label="サーバーランク">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("activity")}<h2>サーバーランク</h2>
+        </div>
+        <span class="feature-status ${selectedSources.length > 0 ? "feature-status--on" : ""}">
+          ${selectedSources.length > 0 ? `${selectedSources.length}項目` : "加算なし"}
+        </span>
+      </div>
+      <div class="settings-grid server-rank-settings-grid">
+        ${renderActiveRankingSourceSettings(settings)}
+        ${renderServerRankPointRules(settings)}
+        <label class="field">
+          <span>BUMPランクリセット周期</span>
+          <select data-bump-rank-field="reset_interval">
+            ${BUMP_RANK_RESET_INTERVALS.map((interval) => `<option value="${escapeAttribute(interval.id)}" ${interval.id === settings.reset_interval ? "selected" : ""}>${escapeHtml(interval.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>BUMPランキング送信チャンネル</span>
+          <select data-bump-rank-field="ranking_channel_id" ${!resetEnabled || (selectedGuildCanConfigure() && !state.ttsOptions) ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.ranking_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>BUMP再通知チャンネル</span>
+          <select data-bump-rank-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>BUMPメンションロール</span>
+          <select data-bump-rank-field="role_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === settings.role_id ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
+          </select>
+        </label>
+        <div class="field feature-summary feature-summary--wide bump-rank-summary">
+          <span>BUMP連携</span>
+          ${renderBumpRankSummary(selectedChannel, selectedRole, selectedRankingChannel, settings)}
+        </div>
+      </div>
+      <div class="settings-panel__footer">
+        ${icon("info")}<span>メッセージは1件1pt、テキストは1文字1pt、VCは1分1pt、BUMPは獲得ポイント分をサーバーアクティブランキングへ加算します。</span>
+      </div>
+    </section>
+    ${renderGuildRankingsPanel()}
+  `;
+}
+
+function renderActiveRankingSourceSettings(settings) {
+  const selectedSources = normalizeActiveRankingSources(settings.active_ranking_sources);
+  const selected = new Set(selectedSources);
+  return `
+    <div class="field feature-summary feature-summary--wide active-ranking-settings">
+      <span>サーバーアクティブランキングに加算</span>
+      <div class="active-ranking-source-options">
+        ${ACTIVE_RANKING_SOURCES.map((source) => `
+          <label class="active-ranking-source ${selected.has(source.id) ? "active-ranking-source--selected" : ""}">
+            <input type="checkbox" data-bump-rank-source="${escapeAttribute(source.id)}" ${selected.has(source.id) ? "checked" : ""} />
+            <strong>${escapeHtml(source.label)}</strong>
+            <small>${escapeHtml(source.metric)}</small>
+          </label>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderServerRankPointRules(settings) {
+  const selected = new Set(normalizeActiveRankingSources(settings.active_ranking_sources));
+  return `
+    <div class="field feature-summary feature-summary--wide server-rank-point-rules">
+      <span>ポイント換算</span>
+      <div class="server-rank-rule-grid">
+        ${ACTIVE_RANKING_SOURCES.map((source) => `
+          <div class="server-rank-rule ${selected.has(source.id) ? "server-rank-rule--active" : ""}">
+            <strong>${escapeHtml(source.label)}</strong>
+            <span>${escapeHtml(serverRankPointRuleText(source.id))}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function serverRankPointRuleText(source) {
+  if (source === "text") {
+    return "1文字 = 1pt";
+  }
+  if (source === "message") {
+    return "1送信 = 1pt";
+  }
+  if (source === "vc") {
+    return "1分 = 1pt";
+  }
+  if (source === "bump") {
+    return "Bump/Up獲得pt";
+  }
+  return "";
+}
+
+function renderGuildRankingsPanel() {
+  const rankings = normalizeGuildRankings(state.guildRankings);
+  const period = normalizedRankingPeriod();
+  const periodMeta = rankingPeriodMeta(period);
+  const activeSources = normalizeActiveRankingSources(
+    state.featureSettings?.bump_rank?.active_ranking_sources ?? rankings.active_sources,
+  );
+  const activeEntries = activeRankingEntriesForSources(rankings, activeSources);
+  return `
+    <section class="feature-card guild-ranking-panel" aria-label="サーバーアクティブランキング">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("activity")}<h2>サーバーアクティブランキング</h2>
+        </div>
+        <button class="icon-button icon-button--ghost" type="button" data-action="guild-ranking-refresh" ${state.guildRankingsLoading ? "disabled" : ""}>
+          ${icon("refresh")}<span>${state.guildRankingsLoading ? "更新中" : "更新"}</span>
+        </button>
+      </div>
+      <div class="activity-period-tabs activity-period-tabs--wide" role="tablist" aria-label="ランキング期間">
+        ${RANKING_PERIODS.map((item) => `
+          <button class="activity-period-tab ${period === item.id ? "activity-period-tab--active" : ""}" type="button" role="tab" aria-selected="${period === item.id}" data-ranking-period="${escapeAttribute(item.id)}">
+            ${escapeHtml(item.label)}
+          </button>
+        `).join("")}
+      </div>
+      <div class="activity-range-summary">
+        <strong>${escapeHtml(periodMeta.summary)}</strong>
+        <span>${escapeHtml(rankingRangeLabel(rankings))}</span>
+      </div>
+      <div class="active-ranking-source-summary">
+        ${activeSources.length > 0
+          ? activeSources.map((source) => `<span>${escapeHtml(activeRankingSourceLabel(source))}</span>`).join("")
+          : `<span>加算項目なし</span>`}
+      </div>
+      ${state.guildRankingsError ? `<div class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guildRankingsError)}</span></div>` : ""}
+      <div class="guild-ranking-grid">
+        ${renderRankingBoard("サーバーアクティブ", activeEntries, "active")}
+        ${renderRankingBoard("文字数", rankings.text, "text")}
+        ${renderRankingBoard("メッセージ", rankings.message, "message")}
+        ${renderRankingBoard("VC", rankings.vc, "vc")}
+        ${renderRankingBoard("BUMP", rankings.bump, "bump")}
+      </div>
+    </section>
+  `;
+}
+
+function renderRankingBoard(title, entries, metric) {
+  return `
+    <section class="ranking-board" aria-label="${escapeAttribute(title)}ランキング">
+      <div class="ranking-board__header">
+        <span>${escapeHtml(title)}</span>
+        <strong>${escapeHtml(`${entries.length}人`)}</strong>
+      </div>
+      <div class="ranking-board__list">
+        ${entries.length > 0
+          ? entries.slice(0, 10).map((entry) => renderRankingRow(entry, metric)).join("")
+          : `<div class="empty-state">まだ記録がありません。</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderRankingRow(entry, metric) {
+  return `
+    <div class="ranking-row">
+      <span class="ranking-row__rank">${escapeHtml(`#${entry.rank}`)}</span>
+      <div class="ranking-row__user">
+        <strong>${escapeHtml(rankingUserLabel(entry))}</strong>
+        <small>${escapeHtml(formatRankingDetail(entry))}</small>
+      </div>
+      <span class="ranking-row__value">${escapeHtml(formatRankingMetric(entry, metric))}</span>
+    </div>
+  `;
+}
+
+function activeRankingEntriesForSources(rankings, sources) {
+  const normalizedSources = normalizeActiveRankingSources(sources);
+  if (sameStringList(normalizedSources, normalizeActiveRankingSources(rankings.active_sources))) {
+    return rankings.active;
+  }
+  const entriesByUser = new Map();
+  for (const entries of [rankings.text, rankings.message, rankings.vc, rankings.bump]) {
+    for (const entry of entries) {
+      const current = entriesByUser.get(entry.user_id) ?? {
+        ...entry,
+        points: 0,
+        message_count: 0,
+        character_count: 0,
+        vc_seconds: 0,
+        bump_count: 0,
+      };
+      entriesByUser.set(entry.user_id, {
+        ...current,
+        display_name: current.display_name || entry.display_name,
+        message_count: Math.max(current.message_count, entry.message_count),
+        character_count: Math.max(current.character_count, entry.character_count),
+        vc_seconds: Math.max(current.vc_seconds, entry.vc_seconds),
+        bump_count: Math.max(current.bump_count, entry.bump_count),
+      });
+    }
+  }
+  return Array.from(entriesByUser.values())
+    .map((entry) => ({
+      ...entry,
+      points: rankingPointsForSources(entry, normalizedSources),
+    }))
+    .filter((entry) => entry.points > 0)
+    .sort(compareRankingEntries)
+    .slice(0, 50)
+    .map((entry, index) => ({ ...entry, rank: index + 1 }));
+}
+
+function normalizedRankingPeriod() {
+  return normalizeRankingPeriod(state.activeRankingPeriod);
+}
+
+function rankingPeriodMeta(period) {
+  return RANKING_PERIODS.find((item) => item.id === period) ?? RANKING_PERIODS[0];
+}
+
+function rankingRangeLabel(rankings) {
+  if (!rankings.start_date || !rankings.end_date) {
+    return "期間データなし";
+  }
+  return rankings.start_date === rankings.end_date
+    ? rankings.start_date
+    : `${rankings.start_date} - ${rankings.end_date}`;
+}
+
+function activeRankingSourceLabel(source) {
+  return ACTIVE_RANKING_SOURCES.find((item) => item.id === source)?.label ?? source;
+}
+
+function rankingUserLabel(entry) {
+  return entry.display_name || `User ${entry.user_id}`;
+}
+
+function formatRankingMetric(entry, metric) {
+  if (metric === "text") {
+    return `${formatCompactNumber(entry.character_count)}文字`;
+  }
+  if (metric === "message") {
+    return `${formatCompactNumber(entry.message_count)}件`;
+  }
+  if (metric === "vc") {
+    return formatActivityDuration(entry.vc_seconds);
+  }
+  if (metric === "bump") {
+    return `${formatCompactNumber(entry.bump_count)} pt`;
+  }
+  return `${formatCompactNumber(entry.points)} pt`;
+}
+
+function rankingPointsForSources(entry, sources) {
+  return sources.reduce((total, source) => {
+    if (source === "text") {
+      return total + entry.character_count;
+    }
+    if (source === "message") {
+      return total + entry.message_count;
+    }
+    if (source === "vc") {
+      return total + (entry.vc_seconds > 0 ? Math.ceil(entry.vc_seconds / 60) : 0);
+    }
+    if (source === "bump") {
+      return total + entry.bump_count;
+    }
+    return total;
+  }, 0);
+}
+
+function compareRankingEntries(left, right) {
+  return (
+    right.points - left.points
+    || right.message_count - left.message_count
+    || right.character_count - left.character_count
+    || right.vc_seconds - left.vc_seconds
+    || right.bump_count - left.bump_count
+    || left.user_id.localeCompare(right.user_id)
+  );
+}
+
+function formatRankingDetail(entry) {
+  return [
+    `${formatCompactNumber(entry.message_count)}件`,
+    `${formatCompactNumber(entry.character_count)}文字`,
+    formatActivityDuration(entry.vc_seconds),
+    `${formatCompactNumber(entry.bump_count)} BUMP`,
+  ].join(" / ");
 }
 
 function renderHostAdminPanel() {
@@ -7662,6 +8098,8 @@ function handleClick(event) {
       void loadPlaylist();
     } else if (action === "user-activity-refresh") {
       void loadUserActivity();
+    } else if (action === "guild-ranking-refresh") {
+      void loadGuildRankings();
     } else if (action === "playlist-add-url") {
       void submitPlaylistInput();
     } else if (action === "playlist-add-search-result") {
@@ -7775,6 +8213,13 @@ function handleClick(event) {
     return;
   }
 
+  const rankingPeriodEl = target.closest("[data-ranking-period]");
+  if (rankingPeriodEl) {
+    state.activeRankingPeriod = normalizeRankingPeriod(rankingPeriodEl.dataset.rankingPeriod);
+    void loadGuildRankings();
+    return;
+  }
+
   const userPanelTabEl = target.closest("[data-user-panel-tab]");
   if (userPanelTabEl) {
     state.activeUserPanelTab = USER_PANEL_TABS.some((tab) => tab.id === userPanelTabEl.dataset.userPanelTab)
@@ -7845,6 +8290,8 @@ function handleChange(event) {
     updateVcNotificationField(target);
   } else if (target.dataset.bumpRankField) {
     updateBumpRankField(target);
+  } else if (target.dataset.bumpRankSource) {
+    updateBumpRankSource(target);
   } else if ("playlistFileInput" in target.dataset) {
     const file = target.files?.[0] ?? null;
     target.value = "";
@@ -8177,6 +8624,33 @@ function updateBumpRankField(target, options = { renderAfter: true }) {
     ...current,
     [field]: value,
     ...(field === "reset_interval" && value === "none" ? { ranking_channel_id: "" } : {}),
+  };
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateBumpRankSource(target, options = { renderAfter: true }) {
+  if (!state.featureSettings || !(target instanceof HTMLInputElement)) {
+    return;
+  }
+  const source = String(target.dataset.bumpRankSource ?? "").trim();
+  if (!ACTIVE_RANKING_SOURCES.some((item) => item.id === source)) {
+    return;
+  }
+  const current = normalizeBumpRankSettings(state.featureSettings.bump_rank);
+  const selected = new Set(current.active_ranking_sources);
+  if (target.checked) {
+    selected.add(source);
+  } else {
+    selected.delete(source);
+  }
+  state.featureSettings.bump_rank = {
+    ...current,
+    active_ranking_sources: ACTIVE_RANKING_SOURCES
+      .map((item) => item.id)
+      .filter((id) => selected.has(id)),
   };
   updateDirtyState("features");
   if (options.renderAfter) {
