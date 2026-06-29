@@ -1038,33 +1038,45 @@ body.body--guard.body--status-only .app-shell--guard {
 
 .active-ranking-source {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 4px 8px;
+  grid-template-columns: minmax(0, 1fr) 46px;
+  gap: 4px 10px;
   align-items: center;
+  align-content: center;
   min-width: 0;
+  min-height: 60px;
   border: 1px solid rgba(244, 218, 255, 0.13);
   border-radius: 8px;
-  padding: 9px;
+  padding: 9px 11px;
   background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
 }
 
 .active-ranking-source input {
-  grid-row: span 2;
-  width: 16px;
-  height: 16px;
-  accent-color: var(--success);
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  width: 46px;
+  height: 26px;
+  min-height: 26px;
+  margin: 0;
 }
 
 .active-ranking-source strong {
+  grid-column: 1;
+  min-width: 0;
   color: var(--text-strong);
   font-size: 0.86rem;
   font-weight: 820;
+  line-height: 1.2;
 }
 
 .active-ranking-source small {
+  grid-column: 1;
+  min-width: 0;
   color: var(--muted-2);
   font-size: 0.72rem;
   font-weight: 720;
+  line-height: 1.25;
 }
 
 .active-ranking-source--selected {
