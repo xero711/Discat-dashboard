@@ -6947,7 +6947,7 @@ function renderServerRankSettings(textChannels, roles) {
         </div>
       </div>
       <div class="settings-panel__footer">
-        ${icon("info")}<span>メッセージは1件1pt、テキストは1文字1pt、VCは1分1pt、BUMPは獲得ポイント分をサーバーアクティブランキングへ加算します。</span>
+        ${icon("info")}<span>メッセージは1件1pt、テキストは100文字1pt、VCは1分1pt、BUMPは獲得ポイント分をサーバーアクティブランキングへ加算します。</span>
       </div>
     </section>
     ${renderGuildRankingsPanel()}
@@ -6992,7 +6992,7 @@ function renderServerRankPointRules(settings) {
 
 function serverRankPointRuleText(source) {
   if (source === "text") {
-    return "1文字 = 1pt";
+    return "100文字 = 1pt";
   }
   if (source === "message") {
     return "1送信 = 1pt";
@@ -7162,7 +7162,7 @@ function formatRankingMetric(entry, metric) {
 function rankingPointsForSources(entry, sources) {
   return sources.reduce((total, source) => {
     if (source === "text") {
-      return total + entry.character_count;
+      return total + Math.floor(entry.character_count / 100);
     }
     if (source === "message") {
       return total + entry.message_count;
