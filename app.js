@@ -6890,7 +6890,6 @@ function renderBumpRankSettings(textChannels, roles) {
         </button>
       </div>
     </section>
-    ${renderGuildRankingsPanel()}
   `;
 }
 
