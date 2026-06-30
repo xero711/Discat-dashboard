@@ -196,7 +196,7 @@ const SETTINGS_PAGES = [
     id: "server-rank",
     label: "サーバーランク",
     eyebrow: "ランキング",
-    description: "統合ポイントと表示",
+    description: "アクティブポイントと表示",
     help: "テキスト、メッセージ、VC、BUMP/UPの加算項目、リセット周期、ランキング送信先を設定し、期間別ランキングを確認します。",
     icon: "activity",
     view: "features",
@@ -7310,10 +7310,10 @@ function renderServerRankSettings(textChannels) {
   const selectedRankingChannel = textChannels.find((channel) => channel.id === settings.ranking_channel_id);
   const resetEnabled = settings.reset_interval !== "none";
   return `
-    <section class="feature-card server-rank-card" aria-label="サーバーランク">
+    <section class="feature-card server-rank-card" aria-label="サーバーアクティブランク設定">
       <div class="feature-card__header">
         <div class="panel-heading">
-          ${icon("activity")}<h2>サーバーランク</h2>
+          ${icon("activity")}<h2>サーバーアクティブランク設定</h2>
         </div>
         <span class="feature-status ${selectedSources.length > 0 ? "feature-status--on" : ""}">
           ${selectedSources.length > 0 ? `${selectedSources.length}項目` : "加算なし"}
@@ -7341,7 +7341,7 @@ function renderServerRankSettings(textChannels) {
         </div>
       </div>
       <div class="settings-panel__footer">
-        ${icon("info")}<span>メッセージは1件1pt、テキストは100文字1pt、VCは1分1pt、BUMP/UPは獲得ポイント分をサーバーアクティブランキングへ加算します。</span>
+        ${icon("info")}<span>アクティブランクは、メッセージ数、テキスト数、VC時間、BUMP/UP回数を期間ごとに集計します。</span>
       </div>
     </section>
     ${renderGuildRankingsPanel()}
@@ -7353,7 +7353,7 @@ function renderActiveRankingSourceSettings(settings) {
   const selected = new Set(selectedSources);
   return `
     <div class="field feature-summary feature-summary--wide active-ranking-settings">
-      <span>サーバーアクティブランキングに加算</span>
+      <span>アクティブランクに加算する項目</span>
       <div class="active-ranking-source-options">
         ${ACTIVE_RANKING_SOURCES.map((source) => `
           <label class="active-ranking-source ${selected.has(source.id) ? "active-ranking-source--selected" : ""}">
