@@ -184,6 +184,15 @@ const SETTINGS_PAGES = [
     view: "features",
   },
   {
+    id: "temporary-vc",
+    label: "一時VC",
+    eyebrow: "VC",
+    description: "登録VCから自動作成",
+    help: "登録VCに参加したユーザーを、指定カテゴリに作成した一時VCへ移動します。一時VC内のパネルから名前、人数制限、ロック、削除を操作できます。",
+    icon: "radio",
+    view: "features",
+  },
+  {
     id: "server-rank",
     label: "サーバーランク",
     eyebrow: "ランキング",
@@ -241,8 +250,8 @@ const GUARD_FEATURES = [
   {
     id: "verification",
     label: "認証",
-    description: "認証ボタン、付与ロール、同一端末検知時の処置を設定します。",
-    help: "サーバーごとに認証ボタン、ログチャンネル、付与ロール、同一端末検知時の処置を設定します。",
+    description: "認証ボタン、付与ロール、同一端末検知時の処置、荒らしサーバー参加チェックを設定します。",
+    help: "サーバーごとに認証ボタン、ログチャンネル、付与ロール、同一端末検知時の処置、荒らしサーバー参加チェックを設定します。",
     icon: "lock",
   },
   {
@@ -680,6 +689,7 @@ const state = {
       log_channel_id: "",
       role_id: "",
       duplicate_action: "notify",
+      restricted_guild_check_enabled: true,
     },
     moderationForm: {
       guild_id: "",
@@ -799,7 +809,7 @@ async function boot() {
     return;
   }
   await loadServiceStatus({ silent: true, hydrate: false });
-  if (serviceMaintenanceActive()) {
+  if (serviceBlockedActive()) {
     return;
   }
   await loadTurnstileConfig();
@@ -1026,7 +1036,7 @@ function renderProductTransition(fromProduct, toProduct) {
 
 async function loadOneDashboardData() {
   await loadServiceStatus({ silent: true, hydrate: false });
-  if (serviceMaintenanceActive()) {
+  if (serviceBlockedActive()) {
     return;
   }
   await loadTurnstileConfig();
@@ -1399,7 +1409,6 @@ async function loadAccount() {
   state.loading = true;
   state.message = null;
   state.guildDataError = null;
-  state.ticketPanelPublishing = false;
   render();
 
   try {
@@ -1618,7 +1627,7 @@ function shouldDeferGuildOptionsRender() {
 async function loadServiceStatus(options = {}) {
   const requestId = state.requestIds.serviceStatus + 1;
   state.requestIds.serviceStatus = requestId;
-  const wasMaintenance = serviceMaintenanceActive() || state.serviceStatus.loading;
+  const wasBlocked = serviceBlockedActive() || state.serviceStatus.loading;
   state.serviceStatus = {
     ...state.serviceStatus,
     loading: !options.silent,
@@ -1641,7 +1650,7 @@ async function loadServiceStatus(options = {}) {
     state.serviceStatus = normalizeServiceStatus({
       api_online: false,
       bot_online: false,
-      maintenance: true,
+      maintenance: false,
       bot_stale: true,
       checked_at: new Date().toISOString(),
     });
@@ -1649,7 +1658,7 @@ async function loadServiceStatus(options = {}) {
   } finally {
     if (requestId === state.requestIds.serviceStatus) {
       render();
-      if (wasMaintenance && !serviceMaintenanceActive() && options.hydrate !== false) {
+      if (wasBlocked && !serviceBlockedActive() && options.hydrate !== false) {
         void ensureInteractiveWhenServiceOnline();
       }
     }
@@ -1658,13 +1667,13 @@ async function loadServiceStatus(options = {}) {
 
 async function refreshServiceStatus() {
   await loadServiceStatus({ hydrate: false });
-  if (!serviceMaintenanceActive()) {
+  if (!serviceBlockedActive()) {
     await ensureInteractiveWhenServiceOnline();
   }
 }
 
 async function ensureInteractiveWhenServiceOnline() {
-  if (state.serviceStatus.loading || serviceMaintenanceActive()) {
+  if (state.serviceStatus.loading || serviceBlockedActive()) {
     return;
   }
   if (!state.user && state.security.loading) {
@@ -2093,7 +2102,7 @@ function normalizeBotGuilds(guilds) {
 function normalizeServiceStatus(status) {
   const apiOnline = Boolean(status?.api_online);
   const botOnline = Boolean(status?.bot_online);
-  const maintenance = Boolean(status?.maintenance ?? !botOnline);
+  const maintenance = apiOnline && Boolean(status?.maintenance ?? !botOnline);
   return {
     loading: false,
     apiOnline,
@@ -2107,7 +2116,15 @@ function normalizeServiceStatus(status) {
 }
 
 function serviceMaintenanceActive() {
-  return !state.serviceStatus.loading && state.serviceStatus.maintenance;
+  return !state.serviceStatus.loading && state.serviceStatus.apiOnline && state.serviceStatus.maintenance;
+}
+
+function serviceUnavailableActive() {
+  return !state.serviceStatus.loading && !state.serviceStatus.apiOnline;
+}
+
+function serviceBlockedActive() {
+  return serviceUnavailableActive() || serviceMaintenanceActive();
 }
 
 function serviceCheckingActive() {
@@ -2389,6 +2406,7 @@ function normalizeFeatureSettings(featureSettings) {
       : [],
     vc_notification: normalizeVcNotificationSettings(featureSettings?.vc_notification),
     bump_rank: normalizeBumpRankSettings(featureSettings?.bump_rank),
+    temporary_voice: normalizeTemporaryVoiceSettings(featureSettings?.temporary_voice),
     ticket: normalizeTicketSettings(featureSettings?.ticket),
   };
 }
@@ -2572,6 +2590,17 @@ function normalizeBumpRankSettings(settings) {
   };
 }
 
+function normalizeTemporaryVoiceSettings(settings) {
+  const bitrate = Number(settings?.bitrate);
+  return {
+    trigger_channel_id: normalizeNullableString(settings?.trigger_channel_id) ?? "",
+    category_id: normalizeNullableString(settings?.category_id) ?? "",
+    default_name_template: String(settings?.default_name_template ?? "{user}のVC").trim() || "{user}のVC",
+    user_limit: clampInteger(settings?.user_limit ?? 0, 0, 99),
+    bitrate: Number.isFinite(bitrate) && bitrate > 0 ? clampInteger(bitrate, 8000, 384000) : null,
+  };
+}
+
 function normalizeTicketSettings(settings) {
   const cooldownSeconds = Number(settings?.staff_call_cooldown_seconds);
   return {
@@ -2663,6 +2692,7 @@ function comparableFeatureSettings(featureSettings) {
   }
   const vcNotification = comparableVcNotificationSettings(featureSettings.vc_notification);
   const bumpRank = comparableBumpRankSettings(featureSettings.bump_rank);
+  const temporaryVoice = comparableTemporaryVoiceSettings(featureSettings.temporary_voice);
   const ticket = comparableTicketSettings(featureSettings.ticket);
   return {
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
@@ -2673,6 +2703,7 @@ function comparableFeatureSettings(featureSettings) {
     })),
     vc_notification: vcNotification,
     bump_rank: bumpRank,
+    temporary_voice: temporaryVoice,
     ticket,
   };
 }
@@ -2706,6 +2737,27 @@ function comparableVcNotificationSettings(settings) {
     reaction_message_id: normalizeNullableString(normalized.reaction_message_id),
     emoji: normalized.emoji,
     role_id: normalizeNullableString(normalized.role_id),
+  };
+}
+
+function comparableTemporaryVoiceSettings(settings) {
+  const normalized = normalizeTemporaryVoiceSettings(settings);
+  const hasAnyValue = Boolean(
+    normalized.trigger_channel_id
+      || normalized.category_id
+      || normalized.default_name_template !== "{user}のVC"
+      || normalized.user_limit
+      || normalized.bitrate,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    trigger_channel_id: normalizeNullableString(normalized.trigger_channel_id),
+    category_id: normalizeNullableString(normalized.category_id),
+    default_name_template: normalized.default_name_template,
+    user_limit: normalized.user_limit,
+    bitrate: normalized.bitrate,
   };
 }
 
@@ -2749,6 +2801,7 @@ function normalizeGuardVerificationForm(form) {
     log_channel_id: String(form?.log_channel_id ?? ""),
     role_id: String(form?.role_id ?? ""),
     duplicate_action: normalizeGuardDuplicateAction(form?.duplicate_action),
+    restricted_guild_check_enabled: form?.restricted_guild_check_enabled !== false,
   };
 }
 
@@ -2763,6 +2816,7 @@ function guardVerificationFormFromSettings(guildId) {
     log_channel_id: settings?.log_channel_id ?? "",
     role_id: settings?.role_id ?? "",
     duplicate_action: settings?.duplicate_action ?? "notify",
+    restricted_guild_check_enabled: settings?.restricted_guild_check_enabled ?? true,
   });
 }
 
@@ -3063,6 +3117,11 @@ function buildFeatureSettingsPatch() {
       vc_notification: buildVcNotificationPatch(state.featureSettings.vc_notification),
     };
   }
+  if (pageId === "temporary-vc") {
+    return {
+      temporary_voice: buildTemporaryVoicePatch(state.featureSettings.temporary_voice),
+    };
+  }
   if (pageId === "ticket") {
     return {
       ticket: buildTicketPatch(state.featureSettings.ticket),
@@ -3106,6 +3165,27 @@ function buildVcNotificationPatch(settings) {
     reaction_message_id: normalized.reaction_message_id || null,
     emoji: normalized.emoji,
     role_id: normalized.role_id || null,
+  };
+}
+
+function buildTemporaryVoicePatch(settings) {
+  const normalized = normalizeTemporaryVoiceSettings(settings);
+  const hasAnyValue = Boolean(
+    normalized.trigger_channel_id
+      || normalized.category_id
+      || normalized.default_name_template !== "{user}のVC"
+      || normalized.user_limit
+      || normalized.bitrate,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    trigger_channel_id: normalized.trigger_channel_id || null,
+    category_id: normalized.category_id || null,
+    default_name_template: normalized.default_name_template || "{user}のVC",
+    user_limit: normalized.user_limit,
+    bitrate: normalized.bitrate,
   };
 }
 
@@ -3330,6 +3410,7 @@ function resetSessionState() {
   state.savedFeatureSettings = null;
   state.ttsOptions = null;
   state.guildDataError = null;
+  state.ticketPanelPublishing = false;
   state.hostStatus = null;
   state.hostLogs = [];
   state.hostError = null;
@@ -3544,6 +3625,9 @@ function renderMainContent() {
   if (serviceCheckingActive()) {
     return renderServiceStatusPanel("checking");
   }
+  if (serviceUnavailableActive()) {
+    return renderServiceStatusPanel("unavailable");
+  }
   if (serviceMaintenanceActive()) {
     return renderServiceStatusPanel("maintenance");
   }
@@ -3554,7 +3638,7 @@ function renderMainContent() {
 }
 
 function serviceStatusOnlyActive() {
-  return serviceCheckingActive() || serviceMaintenanceActive() || authCheckingActive();
+  return serviceCheckingActive() || serviceBlockedActive() || authCheckingActive();
 }
 
 function renderTopbar() {
@@ -3650,8 +3734,11 @@ function loginButtonState() {
   if (authCheckingActive()) {
     return { icon: "radio", label: "接続中" };
   }
+  if (serviceUnavailableActive()) {
+    return { icon: "alert", label: "API接続エラー" };
+  }
   if (serviceMaintenanceActive()) {
-    return { icon: "radio", label: "メンテナンス中" };
+    return { icon: "radio", label: "BOT状態未更新" };
   }
   if (state.serviceStatus.loading) {
     return { icon: "radio", label: "接続中" };
@@ -3706,9 +3793,25 @@ function renderLoginPanel() {
 
 function renderServiceStatusPanel(mode) {
   const checking = mode === "checking" || state.serviceStatus.loading;
+  const unavailable = mode === "unavailable" || (!checking && serviceUnavailableActive());
+  const title = checking ? "接続確認中" : unavailable ? "API接続エラー" : "BOT状態未更新";
+  const message = checking
+    ? "APIとBOTの状態を確認しています。"
+    : unavailable
+      ? "BOTが起動中でも、APIが落ちているとダッシュボードは使えません。APIを起動して再チェックしてください。"
+      : "BOTのステータス更新が止まっています。BOTを再起動するか、APIと同じデータフォルダを見ているか確認してください。";
   return `
-    <section class="service-status-panel service-status-panel--${checking ? "checking" : "maintenance"}" data-service-status>
-      <h2>${checking ? "接続中" : "メンテナンス中"}</h2>
+    <section class="service-status-panel service-status-panel--${checking ? "checking" : unavailable ? "unavailable" : "maintenance"}" data-service-status>
+      <div class="service-status-panel__copy">
+        <div class="service-status-panel__eyebrow">${icon(unavailable ? "alert" : "radio")}<span>${checking ? "確認中" : unavailable ? "API停止" : "BOT確認待ち"}</span></div>
+        <h2>${title}</h2>
+        <p>${escapeHtml(message)}</p>
+        ${
+          checking
+            ? ""
+            : `<button class="icon-button icon-button--primary" type="button" data-action="refresh-service-status">${icon("refresh")}<span>再チェック</span></button>`
+        }
+      </div>
     </section>
   `;
 }
@@ -3765,7 +3868,7 @@ function loginBlocked() {
   return (
     authCheckingActive() ||
     state.serviceStatus.loading ||
-    serviceMaintenanceActive() ||
+    serviceBlockedActive() ||
     state.security.loading ||
     Boolean(state.security.error && !state.security.verified) ||
     (state.security.enabled && !state.security.verified)
@@ -4026,6 +4129,7 @@ function normalizeGuardVerificationSettings(settings) {
     log_channel_id: String(item?.log_channel_id ?? ""),
     role_id: String(item?.role_id ?? ""),
     duplicate_action: normalizeGuardDuplicateAction(item?.duplicate_action),
+    restricted_guild_check_enabled: item?.restricted_guild_check_enabled !== false,
     updated_at: item?.updated_at ?? null,
     updated_by: item?.updated_by ?? null,
   })).filter((item) => item.guild_id);
@@ -4735,6 +4839,10 @@ function renderGuardVerification() {
         <label class="toggle-row guard-verification-toggle">
           <input type="checkbox" data-guard-verification-field="button_channel_lock_enabled" ${form.button_channel_lock_enabled ? "checked" : ""} />
           <span>認証ボタン配置チャンネルを管理者以外送信不可にする</span>
+        </label>
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-verification-field="restricted_guild_check_enabled" ${form.restricted_guild_check_enabled ? "checked" : ""} />
+          <span>荒らしサーバー参加ユーザーを自動ではじく</span>
         </label>
         <label class="toggle-row guard-verification-toggle">
           <input type="checkbox" data-guard-verification-field="enabled" ${form.enabled ? "checked" : ""} />
@@ -6754,6 +6862,7 @@ function renderFeatureSettingsForm() {
     return renderGuildDataState();
   }
   const textChannels = state.ttsOptions?.text_channels ?? [];
+  const voiceChannels = state.ttsOptions?.voice_channels ?? [];
   const categories = state.ttsOptions?.categories ?? [];
   const roles = state.ttsOptions?.roles ?? [];
   const dirty = isViewDirty("features");
@@ -6762,6 +6871,7 @@ function renderFeatureSettingsForm() {
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
+    "temporary-vc": () => renderTemporaryVoiceSettings(voiceChannels, categories),
     "ticket": () => renderTicketSettings(categories, textChannels, roles),
     "server-rank": () => renderServerRankSettings(textChannels),
     "bump-rank": () => renderBumpRankSettings(textChannels, roles),
@@ -6977,6 +7087,67 @@ function renderVcNotificationSettings(textChannels, roles) {
       <div class="feature-card__actions">
         <button class="icon-button icon-button--ghost" type="button" data-action="clear-vc-notification">
           ${icon("trash")}<span>VC通知を解除</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderTemporaryVoiceSettings(voiceChannels, categories) {
+  const settings = normalizeTemporaryVoiceSettings(state.featureSettings.temporary_voice);
+  const triggerChannel = voiceChannels.find((channel) => channel.id === settings.trigger_channel_id);
+  const category = categories.find((channel) => channel.id === settings.category_id);
+  const enabled = Boolean(settings.trigger_channel_id && settings.category_id);
+  const bitrateKbps = settings.bitrate ? Math.round(settings.bitrate / 1000) : "";
+  const optionsLoading = selectedGuildCanConfigure() && !state.ttsOptions;
+  return `
+    <section class="feature-card temporary-vc-card" aria-label="一時VC">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("radio")}<h2>一時VC</h2>
+        </div>
+        <span class="feature-status ${enabled ? "feature-status--on" : ""}">
+          ${enabled ? "有効" : "未設定"}
+        </span>
+      </div>
+      <div class="settings-grid">
+        <label class="field">
+          <span>登録VC</span>
+          <select data-temporary-voice-field="trigger_channel_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${voiceChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.trigger_channel_id ? "selected" : ""}>${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>作成先カテゴリ</span>
+          <select data-temporary-voice-field="category_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${categories.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === settings.category_id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>作成されるVC名</span>
+          <input type="text" maxlength="80" value="${escapeAttribute(settings.default_name_template)}" data-temporary-voice-field="default_name_template" placeholder="{user}のVC" />
+        </label>
+        <label class="field">
+          <span>人数制限</span>
+          <input type="number" min="0" max="99" step="1" value="${settings.user_limit}" data-temporary-voice-field="user_limit" />
+        </label>
+        <label class="field">
+          <span>ビットレート（kbps）</span>
+          <input type="number" min="8" max="384" step="1" value="${escapeAttribute(bitrateKbps)}" data-temporary-voice-field="bitrate_kbps" placeholder="自動" />
+        </label>
+        <div class="field feature-summary feature-summary--wide temporary-vc-summary">
+          <span>現在の設定</span>
+          ${renderTemporaryVoiceSummary(triggerChannel, category, settings)}
+        </div>
+      </div>
+      <div class="settings-panel__footer">
+        ${icon("info")}<span>{user} は作成者名、{count} は登録VCにいた人数に置き換わります。作成された一時VCの中には操作パネルが送信されます。</span>
+      </div>
+      <div class="feature-card__actions">
+        <button class="icon-button icon-button--ghost" type="button" data-action="clear-temporary-vc">
+          ${icon("trash")}<span>一時VC設定を解除</span>
         </button>
       </div>
     </section>
@@ -7822,6 +7993,34 @@ function formatVcNotificationSummary(reactionChannel, notificationChannel, role,
   return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
 }
 
+function renderTemporaryVoiceSummary(triggerChannel, category, settings) {
+  const rows = [];
+  if (triggerChannel) {
+    rows.push(["登録VC", triggerChannel.name]);
+  }
+  if (category) {
+    rows.push(["作成先", category.name]);
+  }
+  rows.push(["VC名", settings.default_name_template || "{user}のVC"]);
+  rows.push(["人数", settings.user_limit ? `${settings.user_limit}人` : "無制限"]);
+  if (settings.bitrate) {
+    rows.push(["音質", `${Math.round(settings.bitrate / 1000)}kbps`]);
+  }
+  if (!triggerChannel && !category) {
+    return "<strong>未設定</strong>";
+  }
+  return `
+    <div class="bump-rank-summary__list">
+      ${rows.map(([label, value]) => `
+        <div class="bump-rank-summary__item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderBumpRankSummary(channel, role) {
   const rows = [];
   if (channel) {
@@ -8525,6 +8724,10 @@ function handleClick(event) {
       state.featureSettings.vc_notification = normalizeVcNotificationSettings(null);
       updateDirtyState("features");
       render();
+    } else if (action === "clear-temporary-vc") {
+      state.featureSettings.temporary_voice = normalizeTemporaryVoiceSettings(null);
+      updateDirtyState("features");
+      render();
     } else if (action === "clear-bump-rank") {
       state.featureSettings.bump_rank = {
         ...normalizeBumpRankSettings(state.featureSettings.bump_rank),
@@ -8625,6 +8828,8 @@ function handleChange(event) {
     updateFeatureField(target);
   } else if (target.dataset.stickyField) {
     updateStickyMessageField(target);
+  } else if (target.dataset.temporaryVoiceField) {
+    updateTemporaryVoiceField(target);
   } else if (target.dataset.ticketField) {
     updateTicketField(target);
   } else if (target.dataset.vcNotificationField) {
@@ -8680,6 +8885,11 @@ function handleInput(event) {
 
   if (target.dataset.stickyField) {
     updateStickyMessageField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.temporaryVoiceField) {
+    updateTemporaryVoiceField(target, { renderAfter: false });
     return;
   }
 
@@ -8925,6 +9135,37 @@ function updateStickyMessageField(target, options = { renderAfter: true }) {
   state.featureSettings.sticky_messages = state.featureSettings.sticky_messages.map((rule, ruleIndex) =>
     ruleIndex === index ? { ...rule, [field]: target.value } : rule,
   );
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateTemporaryVoiceField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const field = target.dataset.temporaryVoiceField;
+  const current = normalizeTemporaryVoiceSettings(state.featureSettings.temporary_voice);
+  let patch;
+  if (field === "user_limit") {
+    patch = { user_limit: clampInteger(target.valueAsNumber, 0, 99) };
+  } else if (field === "bitrate_kbps") {
+    const kbps = Number(target.value);
+    patch = {
+      bitrate: Number.isFinite(kbps) && kbps > 0
+        ? clampInteger(kbps, 8, 384) * 1000
+        : null,
+    };
+  } else if (field === "default_name_template") {
+    patch = { default_name_template: String(target.value ?? "").slice(0, 80) };
+  } else {
+    patch = { [field]: target.value };
+  }
+  state.featureSettings.temporary_voice = {
+    ...current,
+    ...patch,
+  };
   updateDirtyState("features");
   if (options.renderAfter) {
     render();

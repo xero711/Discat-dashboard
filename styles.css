@@ -828,6 +828,10 @@ body.body--guard.body--status-only .app-shell--guard {
   gap: 10px;
 }
 
+.ticket-description-field {
+  grid-column: 1 / -1;
+}
+
 .info-help {
   position: relative;
   display: inline-flex;
@@ -916,10 +920,6 @@ body.body--guard.body--status-only .app-shell--guard {
   align-content: center;
 }
 
-.ticket-description-field {
-  grid-column: 1 / -1;
-}
-
 .feature-summary--wide {
   grid-column: 1 / -1;
   min-height: auto;
@@ -942,6 +942,10 @@ body.body--guard.body--status-only .app-shell--guard {
 }
 
 .active-rank-schedule-summary {
+  align-content: start;
+}
+
+.temporary-vc-summary {
   align-content: start;
 }
 
@@ -3443,6 +3447,12 @@ input[type="checkbox"]:checked::before {
   color: #ffe7a3;
   font-size: 0.82rem;
   font-weight: 860;
+}
+
+.service-status-panel--unavailable .service-status-panel__eyebrow {
+  border-color: rgba(255, 111, 145, 0.44);
+  background: rgba(255, 111, 145, 0.14);
+  color: #ffdce5;
 }
 
 .service-status-panel h2 {
