@@ -143,7 +143,7 @@ const SETTINGS_PAGES = [
     label: "読み上げ設定",
     eyebrow: "読み上げ",
     description: "声と自動読み上げ",
-    help: "読み上げエンジン、話者、音量、速度、読み上げ対象チャンネル、ユーザー辞書を設定します。",
+    help: "話者、音量、速度、読み上げ対象チャンネル、ユーザー辞書を設定します。",
     icon: "volume",
     view: "tts",
   },
