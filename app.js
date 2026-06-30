@@ -35,6 +35,7 @@ const SUPPORT_SERVER_URL = "https://discord.gg/6ZzGvfnhRn";
 const TTS_TEXT_LENGTH_DEFAULT = 20;
 const TTS_TEXT_LENGTH_MIN = 1;
 const TTS_TEXT_LENGTH_MAX = 100;
+const TTS_ENGINE_FIXED = "voicevox";
 const HOST_CONTROL_ADMIN_DISCORD_USER_ID = "907254481371144243";
 const SUPPORT_MESSAGE_MAX_LENGTH = 1900;
 const VC_NOTIFICATION_REACTION_EMOJI = "🔔";
@@ -51,21 +52,6 @@ const SUPPORT_REQUIREMENTS = [
   { id: "feature_request", label: "機能要望" },
   { id: "report", label: "通報・緊急相談" },
   { id: "other", label: "その他" },
-];
-
-const TTS_ENGINES = [
-  {
-    value: "voicevox",
-    label: "VOICEVOX",
-  },
-  {
-    value: "aivis",
-    label: "AivisSpeech",
-  },
-  {
-    value: "coeiroink",
-    label: "COEIROINK",
-  },
 ];
 
 const USER_PAGE = {
@@ -2348,6 +2334,7 @@ function normalizeDashboardSettings(settings) {
   return {
     ...settings,
     tts_enabled: Boolean(settings.tts_enabled),
+    tts_engine: TTS_ENGINE_FIXED,
     tts_pitch: clampNumber(settings.tts_pitch ?? 0, -1, 1),
     tts_intonation: clampNumber(settings.tts_intonation ?? 1, 0, 2),
     tts_max_text_length: clampInteger(
@@ -2601,7 +2588,7 @@ function comparableSettings(settings) {
   }
   return {
     tts_enabled: Boolean(settings.tts_enabled),
-    tts_engine: settings.tts_engine,
+    tts_engine: TTS_ENGINE_FIXED,
     tts_speaker: settings.tts_speaker,
     tts_volume: settings.tts_volume,
     tts_speed: settings.tts_speed,
@@ -2860,7 +2847,7 @@ async function saveSettings() {
   return savePatch(
     {
       tts_enabled: Boolean(state.settings.tts_enabled),
-      tts_engine: state.settings.tts_engine,
+      tts_engine: TTS_ENGINE_FIXED,
       tts_speaker: state.settings.tts_speaker,
       tts_volume: state.settings.tts_volume,
       tts_speed: state.settings.tts_speed,
@@ -6403,7 +6390,7 @@ function renderGuildDataState() {
 function renderTtsSettingsForm() {
   const settings = state.settings;
   const dirty = isViewDirty("tts");
-  const voices = state.ttsOptions?.voices?.[settings.tts_engine] ?? [];
+  const voices = state.ttsOptions?.voices?.[TTS_ENGINE_FIXED] ?? [];
   const availableVoices = voices.filter((voice) => voice.available !== false);
   const unavailableVoices = voices.filter((voice) => voice.available === false);
   const voiceAvailabilityLabel = !state.ttsOptions
@@ -6418,13 +6405,6 @@ function renderTtsSettingsForm() {
 
       <div class="settings-grid settings-grid--tts">
         ${renderSwitch("読み上げ", "tts_enabled", settings.tts_enabled)}
-
-        <label class="field">
-          <span>デフォルト読み上げエンジン</span>
-          <select data-settings-field="tts_engine">
-            ${TTS_ENGINES.map((item) => `<option value="${escapeAttribute(item.value)}" ${item.value === settings.tts_engine ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
-          </select>
-        </label>
 
         <label class="field">
           <div class="field__header">
@@ -8440,14 +8420,6 @@ function updateSettingsField(target, options = { renderAfter: true }) {
     value = Number(target.value);
   } else {
     value = target.value;
-  }
-
-  if (field === "tts_engine") {
-    const nextSettings = { ...state.settings, tts_engine: value, tts_speaker: "default" };
-    state.settings = nextSettings;
-    updateDirtyState("tts");
-    render();
-    return;
   }
 
   if (field === "tts_speaker") {
