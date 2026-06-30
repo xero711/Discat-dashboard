@@ -124,6 +124,9 @@ const WELCOME_MESSAGE_TOKEN_GROUPS = [
   },
 ];
 const WELCOME_MESSAGE_TOKENS = WELCOME_MESSAGE_TOKEN_GROUPS.flatMap((group) => group.tokens);
+const TICKET_PANEL_DEFAULT_TITLE = "お問い合わせ・サポート";
+const TICKET_PANEL_DEFAULT_DESCRIPTION = "困ったことがある場合は、下のボタンからチケットを作成してください。\nスタッフが順番に対応します。";
+const TICKET_CALL_COOLDOWN_MINUTES_DEFAULT = 30;
 
 const SETTINGS_PAGES = [
   {
@@ -169,6 +172,15 @@ const SETTINGS_PAGES = [
     description: "参加通知とロール",
     help: "案内メッセージにリアクションしたユーザーへ、VC参加時の通知ロールで知らせます。",
     icon: "bell",
+    view: "features",
+  },
+  {
+    id: "ticket",
+    label: "チケット",
+    eyebrow: "サポート",
+    description: "問い合わせチャンネルとスタッフ対応",
+    help: "カテゴリ、スタッフロール、ログチャンネル、パネル送信先を設定し、ダッシュボードからチケットパネルを送信できます。",
+    icon: "ticket",
     view: "features",
   },
   {
@@ -613,6 +625,7 @@ const state = {
   authChecking: Boolean(getAuthToken()),
   loading: false,
   saving: false,
+  ticketPanelPublishing: false,
   message: null,
   guildDataError: null,
   dirtyViews: {
@@ -689,6 +702,7 @@ const state = {
     rankings: 0,
     guard: 0,
     guildOptions: 0,
+    ticketPanel: 0,
   },
 };
 
@@ -1351,6 +1365,11 @@ const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  publishTicketPanel: (guildId, channelId) =>
+    request(`/guilds/${encodeURIComponent(guildId)}/ticket-panel`, {
+      method: "POST",
+      body: JSON.stringify({ channel_id: normalizeNullableString(channelId) }),
+    }),
   logout: () => request("/auth/logout", { method: "POST" }),
 };
 
@@ -1380,6 +1399,7 @@ async function loadAccount() {
   state.loading = true;
   state.message = null;
   state.guildDataError = null;
+  state.ticketPanelPublishing = false;
   render();
 
   try {
@@ -2369,6 +2389,7 @@ function normalizeFeatureSettings(featureSettings) {
       : [],
     vc_notification: normalizeVcNotificationSettings(featureSettings?.vc_notification),
     bump_rank: normalizeBumpRankSettings(featureSettings?.bump_rank),
+    ticket: normalizeTicketSettings(featureSettings?.ticket),
   };
 }
 
@@ -2551,6 +2572,26 @@ function normalizeBumpRankSettings(settings) {
   };
 }
 
+function normalizeTicketSettings(settings) {
+  const cooldownSeconds = Number(settings?.staff_call_cooldown_seconds);
+  return {
+    category_id: normalizeNullableString(settings?.category_id) ?? "",
+    staff_role_id: normalizeNullableString(settings?.staff_role_id) ?? "",
+    log_channel_id: normalizeNullableString(settings?.log_channel_id) ?? "",
+    panel_channel_id: normalizeNullableString(settings?.panel_channel_id) ?? "",
+    panel_message_id: normalizeNullableString(settings?.panel_message_id) ?? "",
+    panel_title: String(settings?.panel_title ?? TICKET_PANEL_DEFAULT_TITLE).trim() || TICKET_PANEL_DEFAULT_TITLE,
+    panel_description:
+      String(settings?.panel_description ?? TICKET_PANEL_DEFAULT_DESCRIPTION).trim()
+      || TICKET_PANEL_DEFAULT_DESCRIPTION,
+    creator_can_close: settings?.creator_can_close !== false,
+    staff_call_cooldown_seconds: Number.isFinite(cooldownSeconds)
+      ? clampInteger(cooldownSeconds, 60, 86400)
+      : TICKET_CALL_COOLDOWN_MINUTES_DEFAULT * 60,
+    next_number: Math.max(1, Math.trunc(Number(settings?.next_number) || 1)),
+  };
+}
+
 function normalizeBumpRankResetInterval(value) {
   const interval = String(value ?? "none");
   return BUMP_RANK_RESET_INTERVALS.some((item) => item.id === interval) ? interval : "none";
@@ -2622,6 +2663,7 @@ function comparableFeatureSettings(featureSettings) {
   }
   const vcNotification = comparableVcNotificationSettings(featureSettings.vc_notification);
   const bumpRank = comparableBumpRankSettings(featureSettings.bump_rank);
+  const ticket = comparableTicketSettings(featureSettings.ticket);
   return {
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
     global_chat_channel_id: normalizeNullableString(featureSettings.global_chat_channel_id),
@@ -2631,6 +2673,7 @@ function comparableFeatureSettings(featureSettings) {
     })),
     vc_notification: vcNotification,
     bump_rank: bumpRank,
+    ticket,
   };
 }
 
@@ -2663,6 +2706,37 @@ function comparableVcNotificationSettings(settings) {
     reaction_message_id: normalizeNullableString(normalized.reaction_message_id),
     emoji: normalized.emoji,
     role_id: normalizeNullableString(normalized.role_id),
+  };
+}
+
+function comparableTicketSettings(settings) {
+  const normalized = normalizeTicketSettings(settings);
+  const hasAnyValue = Boolean(
+    normalized.category_id
+      || normalized.staff_role_id
+      || normalized.log_channel_id
+      || normalized.panel_channel_id
+      || normalized.panel_message_id
+      || normalized.panel_title !== TICKET_PANEL_DEFAULT_TITLE
+      || normalized.panel_description !== TICKET_PANEL_DEFAULT_DESCRIPTION
+      || normalized.creator_can_close !== true
+      || normalized.staff_call_cooldown_seconds !== TICKET_CALL_COOLDOWN_MINUTES_DEFAULT * 60
+      || normalized.next_number !== 1,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    category_id: normalizeNullableString(normalized.category_id),
+    staff_role_id: normalizeNullableString(normalized.staff_role_id),
+    log_channel_id: normalizeNullableString(normalized.log_channel_id),
+    panel_channel_id: normalizeNullableString(normalized.panel_channel_id),
+    panel_message_id: normalizeNullableString(normalized.panel_message_id),
+    panel_title: normalized.panel_title,
+    panel_description: normalized.panel_description,
+    creator_can_close: normalized.creator_can_close,
+    staff_call_cooldown_seconds: normalized.staff_call_cooldown_seconds,
+    next_number: normalized.next_number,
   };
 }
 
@@ -2910,6 +2984,58 @@ async function saveFeatureSettings() {
   return saved;
 }
 
+async function publishTicketPanel() {
+  if (!state.selectedGuildId || !state.featureSettings) {
+    return false;
+  }
+
+  if (isViewDirty("features")) {
+    const saved = await saveFeatureSettings();
+    if (!saved) {
+      return false;
+    }
+  }
+
+  const ticketSettings = normalizeTicketSettings(state.featureSettings.ticket);
+  if (!ticketSettings.category_id || !ticketSettings.staff_role_id || !ticketSettings.panel_channel_id) {
+    state.message = "カテゴリ、スタッフロール、パネル送信先チャンネルを設定してください。";
+    render();
+    return false;
+  }
+
+  const requestId = state.requestIds.ticketPanel + 1;
+  state.requestIds.ticketPanel = requestId;
+  state.ticketPanelPublishing = true;
+  state.message = null;
+  render();
+
+  try {
+    const result = await api.publishTicketPanel(state.selectedGuildId, ticketSettings.panel_channel_id);
+    if (requestId !== state.requestIds.ticketPanel) {
+      return false;
+    }
+    const refreshed = await api.featureSettings(state.selectedGuildId);
+    if (requestId !== state.requestIds.ticketPanel) {
+      return false;
+    }
+    rememberSavedFeatureSettings(refreshed);
+    state.message = result?.panel_url
+      ? `チケットパネルを送信しました: ${result.panel_url}`
+      : "チケットパネルを送信しました。";
+    return true;
+  } catch (error) {
+    if (requestId === state.requestIds.ticketPanel) {
+      state.message = error instanceof Error ? error.message : "チケットパネルの送信に失敗しました。";
+    }
+    return false;
+  } finally {
+    if (requestId === state.requestIds.ticketPanel) {
+      state.ticketPanelPublishing = false;
+      render();
+    }
+  }
+}
+
 function buildFeatureSettingsPatch() {
   const pageId = activeSettingsPage().id;
   if (pageId === "welcome-message") {
@@ -2935,6 +3061,11 @@ function buildFeatureSettingsPatch() {
   if (pageId === "vc-notification") {
     return {
       vc_notification: buildVcNotificationPatch(state.featureSettings.vc_notification),
+    };
+  }
+  if (pageId === "ticket") {
+    return {
+      ticket: buildTicketPatch(state.featureSettings.ticket),
     };
   }
   if (["bump-rank", "server-rank"].includes(pageId)) {
@@ -2978,6 +3109,37 @@ function buildVcNotificationPatch(settings) {
   };
 }
 
+function buildTicketPatch(settings) {
+  const normalized = normalizeTicketSettings(settings);
+  const hasAnyValue = Boolean(
+    normalized.category_id
+      || normalized.staff_role_id
+      || normalized.log_channel_id
+      || normalized.panel_channel_id
+      || normalized.panel_message_id
+      || normalized.panel_title !== TICKET_PANEL_DEFAULT_TITLE
+      || normalized.panel_description !== TICKET_PANEL_DEFAULT_DESCRIPTION
+      || normalized.creator_can_close !== true
+      || normalized.staff_call_cooldown_seconds !== TICKET_CALL_COOLDOWN_MINUTES_DEFAULT * 60
+      || normalized.next_number !== 1,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    category_id: normalized.category_id || null,
+    staff_role_id: normalized.staff_role_id || null,
+    log_channel_id: normalized.log_channel_id || null,
+    panel_channel_id: normalized.panel_channel_id || null,
+    panel_message_id: normalized.panel_message_id || null,
+    panel_title: normalized.panel_title,
+    panel_description: normalized.panel_description,
+    creator_can_close: normalized.creator_can_close,
+    staff_call_cooldown_seconds: normalized.staff_call_cooldown_seconds,
+    next_number: normalized.next_number,
+  };
+}
+
 function buildBumpRankPatch(settings) {
   const normalized = normalizeBumpRankSettings(settings);
   const sourcesChanged = !sameStringList(normalized.active_ranking_sources, DEFAULT_ACTIVE_RANKING_SOURCES);
@@ -3006,6 +3168,7 @@ async function logout() {
   state.requestIds.save += 1;
   state.requestIds.playlist += 1;
   state.requestIds.rankings += 1;
+  state.requestIds.ticketPanel += 1;
   await api.logout().catch(() => undefined);
   clearAuthToken();
   clearTurnstileProofToken();
@@ -6591,6 +6754,7 @@ function renderFeatureSettingsForm() {
     return renderGuildDataState();
   }
   const textChannels = state.ttsOptions?.text_channels ?? [];
+  const categories = state.ttsOptions?.categories ?? [];
   const roles = state.ttsOptions?.roles ?? [];
   const dirty = isViewDirty("features");
   const page = activeSettingsPage();
@@ -6598,6 +6762,7 @@ function renderFeatureSettingsForm() {
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
+    "ticket": () => renderTicketSettings(categories, textChannels, roles),
     "server-rank": () => renderServerRankSettings(textChannels),
     "bump-rank": () => renderBumpRankSettings(textChannels, roles),
   }[page.id]?.() ?? renderGlobalChatSettings(textChannels);
@@ -6812,6 +6977,105 @@ function renderVcNotificationSettings(textChannels, roles) {
       <div class="feature-card__actions">
         <button class="icon-button icon-button--ghost" type="button" data-action="clear-vc-notification">
           ${icon("trash")}<span>VC通知を解除</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderTicketSettings(categories, textChannels, roles) {
+  const settings = normalizeTicketSettings(state.featureSettings.ticket);
+  const category = categories.find((item) => item.id === settings.category_id);
+  const staffRole = roles.find((role) => role.id === settings.staff_role_id);
+  const logChannel = textChannels.find((channel) => channel.id === settings.log_channel_id);
+  const panelChannel = textChannels.find((channel) => channel.id === settings.panel_channel_id);
+  const enabled = Boolean(settings.category_id && settings.staff_role_id && settings.panel_channel_id);
+  const optionsLoading = selectedGuildCanConfigure() && !state.ttsOptions;
+  const cooldownMinutes = Math.max(1, Math.round(settings.staff_call_cooldown_seconds / 60));
+  const panelMessageUrl =
+    state.selectedGuildId && settings.panel_channel_id && settings.panel_message_id
+      ? `https://discord.com/channels/${encodeURIComponent(state.selectedGuildId)}/${encodeURIComponent(settings.panel_channel_id)}/${encodeURIComponent(settings.panel_message_id)}`
+      : "";
+  const publishDisabled = state.ticketPanelPublishing || optionsLoading || !enabled || !selectedGuildCanConfigure();
+  return `
+    <section class="feature-card ticket-settings-card" aria-label="チケット設定">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("ticket")}<h2>チケット</h2>
+        </div>
+        <span class="feature-status ${enabled ? "feature-status--on" : ""}">
+          ${enabled ? "設定済み" : "未設定"}
+        </span>
+      </div>
+      <div class="settings-grid">
+        <label class="field">
+          <span>チケットカテゴリ</span>
+          <select data-ticket-field="category_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${categories.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === settings.category_id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>スタッフロール</span>
+          <select data-ticket-field="staff_role_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === settings.staff_role_id ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>ログチャンネル</span>
+          <select data-ticket-field="log_channel_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.log_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>パネル送信先</span>
+          <select data-ticket-field="panel_channel_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.panel_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>パネルタイトル</span>
+          <input type="text" maxlength="100" value="${escapeAttribute(settings.panel_title)}" data-ticket-field="panel_title" />
+        </label>
+        <label class="field">
+          <span>スタッフ呼び出し間隔（分）</span>
+          <input type="number" min="1" max="1440" step="1" value="${cooldownMinutes}" data-ticket-field="staff_call_cooldown_minutes" />
+        </label>
+        <label class="field switch-row">
+          <span class="switch-row__label">作成者によるクローズ</span>
+          <input type="checkbox" data-ticket-field="creator_can_close" ${settings.creator_can_close ? "checked" : ""} />
+        </label>
+        <div class="field ticket-description-field">
+          <span>パネル説明</span>
+          <textarea maxlength="1000" rows="4" data-ticket-field="panel_description">${escapeHtml(settings.panel_description)}</textarea>
+        </div>
+        <div class="field feature-summary feature-summary--wide">
+          <span>現在の設定</span>
+          <strong>${category ? escapeHtml(category.name) : "カテゴリ未設定"} / ${staffRole ? `@${escapeHtml(staffRole.name)}` : "スタッフ未設定"} / ${panelChannel ? `#${escapeHtml(panelChannel.name)}` : "パネル未設定"}</strong>
+        </div>
+        <div class="field feature-summary">
+          <span>次の番号</span>
+          <strong>#${String(settings.next_number).padStart(4, "0")}</strong>
+        </div>
+        <div class="field feature-summary">
+          <span>ログ</span>
+          <strong>${logChannel ? `#${escapeHtml(logChannel.name)}` : "未設定"}</strong>
+        </div>
+      </div>
+      <div class="settings-panel__footer">
+        ${icon("info")}<span>チケット作成、クローズ、スタッフ呼び出し、対応開始、ユーザー追加・削除はDiscord内のボタンで操作できます。</span>
+      </div>
+      <div class="feature-card__actions">
+        ${
+          panelMessageUrl
+            ? `<a class="icon-button icon-button--ghost" href="${escapeAttribute(panelMessageUrl)}" target="_blank" rel="noopener">${icon("external")}<span>既存パネルを開く</span></a>`
+            : ""
+        }
+        <button class="icon-button icon-button--primary" type="button" data-action="publish-ticket-panel" ${publishDisabled ? "disabled" : ""}>
+          ${icon(state.ticketPanelPublishing ? "refresh" : "ticket")}<span>${state.ticketPanelPublishing ? "送信中" : "パネルを送信"}</span>
         </button>
       </div>
     </section>
@@ -8218,6 +8482,8 @@ function handleClick(event) {
       void saveSettings();
     } else if (action === "save-feature-settings") {
       void saveFeatureSettings();
+    } else if (action === "publish-ticket-panel") {
+      void publishTicketPanel();
     } else if (action === "save-pending-settings") {
       void savePendingSettings();
     } else if (action === "discard-pending-settings") {
@@ -8359,6 +8625,8 @@ function handleChange(event) {
     updateFeatureField(target);
   } else if (target.dataset.stickyField) {
     updateStickyMessageField(target);
+  } else if (target.dataset.ticketField) {
+    updateTicketField(target);
   } else if (target.dataset.vcNotificationField) {
     updateVcNotificationField(target);
   } else if (target.dataset.bumpRankField) {
@@ -8412,6 +8680,11 @@ function handleInput(event) {
 
   if (target.dataset.stickyField) {
     updateStickyMessageField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.ticketField) {
+    updateTicketField(target, { renderAfter: false });
     return;
   }
 
@@ -8652,6 +8925,39 @@ function updateStickyMessageField(target, options = { renderAfter: true }) {
   state.featureSettings.sticky_messages = state.featureSettings.sticky_messages.map((rule, ruleIndex) =>
     ruleIndex === index ? { ...rule, [field]: target.value } : rule,
   );
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateTicketField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const field = target.dataset.ticketField;
+  if (!field) {
+    return;
+  }
+  const current = normalizeTicketSettings(state.featureSettings.ticket);
+  let patch;
+  if (field === "creator_can_close") {
+    patch = { creator_can_close: target instanceof HTMLInputElement ? target.checked : current.creator_can_close };
+  } else if (field === "staff_call_cooldown_minutes") {
+    patch = {
+      staff_call_cooldown_seconds: clampInteger(Number(target.value), 1, 1440) * 60,
+    };
+  } else if (field === "panel_title") {
+    patch = { panel_title: String(target.value ?? "").slice(0, 100) };
+  } else if (field === "panel_description") {
+    patch = { panel_description: String(target.value ?? "").slice(0, 1000) };
+  } else {
+    patch = { [field]: target.value };
+  }
+  state.featureSettings.ticket = {
+    ...current,
+    ...patch,
+  };
   updateDirtyState("features");
   if (options.renderAfter) {
     render();
@@ -8942,6 +9248,7 @@ function icon(name, label = "") {
     shield: '<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3Z"/><path d="m9 12 2 2 4-4"/>',
     success: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
     terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+    ticket: '<path d="M2 9a3 3 0 0 0 0 6v3a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3a3 3 0 0 0 0-6V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/>',
     trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 0 0-16 0"/>',
