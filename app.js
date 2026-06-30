@@ -87,7 +87,7 @@ const ACTIVE_RANKING_SOURCES = [
   { id: "text", label: "テキスト", metric: "文字数" },
   { id: "message", label: "メッセージ", metric: "送信数" },
   { id: "vc", label: "VC", metric: "接続時間" },
-  { id: "bump", label: "BUMP", metric: "Bump/Up" },
+  { id: "bump", label: "BUMP/UP", metric: "回数とpt" },
 ];
 const DEFAULT_ACTIVE_RANKING_SOURCES = ["message", "text", "vc", "bump"];
 const BUMP_RANK_RESET_INTERVALS = [
@@ -176,7 +176,7 @@ const SETTINGS_PAGES = [
     label: "サーバーランク",
     eyebrow: "ランキング",
     description: "統合ポイントと表示",
-    help: "テキスト、メッセージ、VC、BUMPのどれをサーバーアクティブランキングへ加算するかを設定し、期間別ランキングを確認します。",
+    help: "テキスト、メッセージ、VC、BUMP/UPの加算項目、リセット周期、ランキング送信先を設定し、期間別ランキングを確認します。",
     icon: "activity",
     view: "features",
   },
@@ -185,7 +185,7 @@ const SETTINGS_PAGES = [
     label: "Bump/Upランク",
     eyebrow: "掲示板",
     description: "掲示板通知とランキング",
-    help: "DISBOARDの/bumpとディス速の/up成功を検知し、2時間後の再実行通知、ランク、定期ランキング送信を管理します。",
+    help: "DISBOARDの/bumpとディス速の/up成功を検知し、2時間後の再実行通知とBump/Upポイントを管理します。",
     icon: "activity",
     view: "features",
   },
@@ -2474,6 +2474,7 @@ function normalizeGuildRankingEntry(entry) {
     character_count: Math.max(0, Math.trunc(Number(entry?.character_count) || 0)),
     vc_seconds: Math.max(0, Math.trunc(Number(entry?.vc_seconds) || 0)),
     bump_count: Math.max(0, Math.trunc(Number(entry?.bump_count) || 0)),
+    bump_points: Math.max(0, Math.trunc(Number(entry?.bump_points ?? entry?.bump_count) || 0)),
   };
 }
 
@@ -2892,6 +2893,9 @@ async function saveFeatureSettings() {
       rememberSavedFeatureSettings(updated);
       clearPendingNavigation();
       saved = true;
+      if (state.selectedGuildId && ["bump-rank", "server-rank"].includes(activeSettingsPage().id)) {
+        void loadGuildRankings(state.selectedGuildId, { silent: true });
+      }
     }
   } catch (error) {
     if (requestId === state.requestIds.save) {
@@ -2933,7 +2937,7 @@ function buildFeatureSettingsPatch() {
       vc_notification: buildVcNotificationPatch(state.featureSettings.vc_notification),
     };
   }
-  if (pageId === "bump-rank") {
+  if (["bump-rank", "server-rank"].includes(pageId)) {
     return {
       bump_rank: buildBumpRankPatch(state.featureSettings.bump_rank),
     };
@@ -2976,11 +2980,13 @@ function buildVcNotificationPatch(settings) {
 
 function buildBumpRankPatch(settings) {
   const normalized = normalizeBumpRankSettings(settings);
+  const sourcesChanged = !sameStringList(normalized.active_ranking_sources, DEFAULT_ACTIVE_RANKING_SOURCES);
   const hasAnyValue = Boolean(
     normalized.channel_id
       || normalized.role_id
       || normalized.ranking_channel_id
-      || normalized.reset_interval !== "none",
+      || normalized.reset_interval !== "none"
+      || sourcesChanged,
   );
   if (!hasAnyValue) {
     return null;
@@ -2990,6 +2996,7 @@ function buildBumpRankPatch(settings) {
     role_id: normalized.role_id || null,
     reset_interval: normalized.reset_interval,
     ranking_channel_id: normalized.ranking_channel_id || null,
+    active_ranking_sources: normalized.active_ranking_sources,
   };
 }
 
@@ -2998,6 +3005,7 @@ async function logout() {
   state.requestIds.guildData += 1;
   state.requestIds.save += 1;
   state.requestIds.playlist += 1;
+  state.requestIds.rankings += 1;
   await api.logout().catch(() => undefined);
   clearAuthToken();
   clearTurnstileProofToken();
@@ -3185,6 +3193,10 @@ function resetSessionState() {
   state.userActivityLoading = false;
   state.userActivityError = null;
   state.activeActivityPeriod = "daily";
+  state.guildRankings = null;
+  state.guildRankingsLoading = false;
+  state.guildRankingsError = null;
+  state.activeRankingPeriod = "daily";
   state.activeUserPanelTab = "playlist";
   state.support = createDefaultSupportState();
   resetDirtyViews();
@@ -6586,7 +6598,7 @@ function renderFeatureSettingsForm() {
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
-    "server-rank": () => renderServerRankSettings(textChannels, roles),
+    "server-rank": () => renderServerRankSettings(textChannels),
     "bump-rank": () => renderBumpRankSettings(textChannels, roles),
   }[page.id]?.() ?? renderGlobalChatSettings(textChannels);
 
@@ -6809,10 +6821,8 @@ function renderVcNotificationSettings(textChannels, roles) {
 function renderBumpRankSettings(textChannels, roles) {
   const settings = normalizeBumpRankSettings(state.featureSettings.bump_rank);
   const selectedChannel = textChannels.find((channel) => channel.id === settings.channel_id);
-  const selectedRankingChannel = textChannels.find((channel) => channel.id === settings.ranking_channel_id);
   const selectedRole = roles.find((role) => role.id === settings.role_id);
   const enabled = Boolean(settings.channel_id && settings.role_id);
-  const resetEnabled = settings.reset_interval !== "none";
   return `
     <section class="feature-card" aria-label="Bump/Upランク">
       <div class="feature-card__header">
@@ -6838,22 +6848,9 @@ function renderBumpRankSettings(textChannels, roles) {
             ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === settings.role_id ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
           </select>
         </label>
-        <label class="field">
-          <span>ランクリセット周期</span>
-          <select data-bump-rank-field="reset_interval">
-            ${BUMP_RANK_RESET_INTERVALS.map((interval) => `<option value="${escapeAttribute(interval.id)}" ${interval.id === settings.reset_interval ? "selected" : ""}>${escapeHtml(interval.label)}</option>`).join("")}
-          </select>
-        </label>
-        <label class="field">
-          <span>ランキング送信チャンネル</span>
-          <select data-bump-rank-field="ranking_channel_id" ${!resetEnabled || (selectedGuildCanConfigure() && !state.ttsOptions) ? "disabled" : ""}>
-            <option value="">未設定</option>
-            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.ranking_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
-          </select>
-        </label>
         <div class="field feature-summary feature-summary--wide bump-rank-summary">
           <span>現在の設定</span>
-          ${renderBumpRankSummary(selectedChannel, selectedRole, selectedRankingChannel, settings)}
+          ${renderBumpRankSummary(selectedChannel, selectedRole)}
         </div>
         <div class="field feature-summary">
           <span>次回Bump</span>
@@ -6861,23 +6858,21 @@ function renderBumpRankSettings(textChannels, roles) {
         </div>
       </div>
       <div class="settings-panel__footer">
-        ${icon("info")}<span>DISBOARDの/bumpとディス速の/up成功を検知すると2時間後に再通知し、リセット時に期間内ランキングを送信します。</span>
+        ${icon("info")}<span>DISBOARDの/bumpとディス速の/up成功を検知すると2時間後に再通知します。サーバーアクティブランキングの集計と定期送信はサーバーランクで設定します。</span>
       </div>
       <div class="feature-card__actions">
         <button class="icon-button icon-button--ghost" type="button" data-action="clear-bump-rank">
-          ${icon("trash")}<span>Bump/Upランクを解除</span>
+          ${icon("trash")}<span>Bump/Up通知を解除</span>
         </button>
       </div>
     </section>
   `;
 }
 
-function renderServerRankSettings(textChannels, roles) {
+function renderServerRankSettings(textChannels) {
   const settings = normalizeBumpRankSettings(state.featureSettings.bump_rank);
-  const selectedChannel = textChannels.find((channel) => channel.id === settings.channel_id);
-  const selectedRankingChannel = textChannels.find((channel) => channel.id === settings.ranking_channel_id);
-  const selectedRole = roles.find((role) => role.id === settings.role_id);
   const selectedSources = normalizeActiveRankingSources(settings.active_ranking_sources);
+  const selectedRankingChannel = textChannels.find((channel) => channel.id === settings.ranking_channel_id);
   const resetEnabled = settings.reset_interval !== "none";
   return `
     <section class="feature-card server-rank-card" aria-label="サーバーランク">
@@ -6893,39 +6888,25 @@ function renderServerRankSettings(textChannels, roles) {
         ${renderActiveRankingSourceSettings(settings)}
         ${renderServerRankPointRules(settings)}
         <label class="field">
-          <span>BUMPランクリセット周期</span>
-          <select data-bump-rank-field="reset_interval">
+          <span>アクティブランクリセット周期</span>
+          <select data-bump-rank-field="reset_interval" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
             ${BUMP_RANK_RESET_INTERVALS.map((interval) => `<option value="${escapeAttribute(interval.id)}" ${interval.id === settings.reset_interval ? "selected" : ""}>${escapeHtml(interval.label)}</option>`).join("")}
           </select>
         </label>
         <label class="field">
-          <span>BUMPランキング送信チャンネル</span>
+          <span>リセット時ランキング送信チャンネル</span>
           <select data-bump-rank-field="ranking_channel_id" ${!resetEnabled || (selectedGuildCanConfigure() && !state.ttsOptions) ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.ranking_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
         </label>
-        <label class="field">
-          <span>BUMP再通知チャンネル</span>
-          <select data-bump-rank-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
-            <option value="">未設定</option>
-            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
-          </select>
-        </label>
-        <label class="field">
-          <span>BUMPメンションロール</span>
-          <select data-bump-rank-field="role_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
-            <option value="">未設定</option>
-            ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === settings.role_id ? "selected" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
-          </select>
-        </label>
-        <div class="field feature-summary feature-summary--wide bump-rank-summary">
-          <span>BUMP連携</span>
-          ${renderBumpRankSummary(selectedChannel, selectedRole, selectedRankingChannel, settings)}
+        <div class="field feature-summary feature-summary--wide active-rank-schedule-summary">
+          <span>リセット送信</span>
+          ${renderActiveRankScheduleSummary(selectedRankingChannel, settings)}
         </div>
       </div>
       <div class="settings-panel__footer">
-        ${icon("info")}<span>メッセージは1件1pt、テキストは100文字1pt、VCは1分1pt、BUMPは獲得ポイント分をサーバーアクティブランキングへ加算します。</span>
+        ${icon("info")}<span>メッセージは1件1pt、テキストは100文字1pt、VCは1分1pt、BUMP/UPは獲得ポイント分をサーバーアクティブランキングへ加算します。</span>
       </div>
     </section>
     ${renderGuildRankingsPanel()}
@@ -7018,15 +6999,39 @@ function renderGuildRankingsPanel() {
           ? activeSources.map((source) => `<span>${escapeHtml(activeRankingSourceLabel(source))}</span>`).join("")
           : `<span>加算項目なし</span>`}
       </div>
+      ${renderGuildRankingMetricSummary(rankings, activeEntries)}
       ${state.guildRankingsError ? `<div class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guildRankingsError)}</span></div>` : ""}
       <div class="guild-ranking-grid">
         ${renderRankingBoard("サーバーアクティブ", activeEntries, "active")}
         ${renderRankingBoard("文字数", rankings.text, "text")}
         ${renderRankingBoard("メッセージ", rankings.message, "message")}
         ${renderRankingBoard("VC", rankings.vc, "vc")}
-        ${renderRankingBoard("BUMP", rankings.bump, "bump")}
+        ${renderRankingBoard("BUMP/UP", rankings.bump, "bump")}
       </div>
     </section>
+  `;
+}
+
+function renderGuildRankingMetricSummary(rankings, activeEntries) {
+  const totals = guildRankingTotals(rankings, activeEntries);
+  return `
+    <div class="guild-ranking-metric-grid" aria-label="期間内訳">
+      ${renderGuildRankingMetricCard("総合pt", `${formatCompactNumber(totals.points)} pt`, "加算対象の合計")}
+      ${renderGuildRankingMetricCard("メッセージ", `${formatCompactNumber(totals.message_count)}件`, "期間内送信数")}
+      ${renderGuildRankingMetricCard("テキスト", `${formatCompactNumber(totals.character_count)}文字`, "期間内文字数")}
+      ${renderGuildRankingMetricCard("VC時間", formatActivityDuration(totals.vc_seconds), "期間内接続")}
+      ${renderGuildRankingMetricCard("BUMP/UP", `${formatCompactNumber(totals.bump_count)}回 / ${formatCompactNumber(totals.bump_points)} pt`, "期間内実行")}
+    </div>
+  `;
+}
+
+function renderGuildRankingMetricCard(label, value, caption) {
+  return `
+    <div class="guild-ranking-metric-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(caption)}</small>
+    </div>
   `;
 }
 
@@ -7039,7 +7044,7 @@ function renderRankingBoard(title, entries, metric) {
       </div>
       <div class="ranking-board__list">
         ${entries.length > 0
-          ? entries.slice(0, 10).map((entry) => renderRankingRow(entry, metric)).join("")
+          ? entries.slice(0, 20).map((entry) => renderRankingRow(entry, metric)).join("")
           : `<div class="empty-state">まだ記録がありません。</div>`}
       </div>
     </section>
@@ -7053,10 +7058,77 @@ function renderRankingRow(entry, metric) {
       <div class="ranking-row__user">
         <strong>${escapeHtml(rankingUserLabel(entry))}</strong>
         <small>${escapeHtml(formatRankingDetail(entry))}</small>
+        ${renderRankingBreakdown(entry)}
       </div>
       <span class="ranking-row__value">${escapeHtml(formatRankingMetric(entry, metric))}</span>
     </div>
   `;
+}
+
+function renderRankingBreakdown(entry) {
+  const chips = [
+    ["メッセージ", `${formatCompactNumber(entry.message_count)}件`],
+    ["文字", `${formatCompactNumber(entry.character_count)}文字`],
+    ["VC", formatActivityDuration(entry.vc_seconds)],
+    ["BUMP/UP", `${formatCompactNumber(entry.bump_count)}回`],
+    ["BUMP pt", `${formatCompactNumber(entry.bump_points)}pt`],
+  ];
+  return `
+    <div class="ranking-row__breakdown" aria-label="ランキング内訳">
+      ${chips.map(([label, value]) => `
+        <span class="ranking-row__chip">
+          <small>${escapeHtml(label)}</small>
+          <strong>${escapeHtml(value)}</strong>
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function guildRankingTotals(rankings, activeEntries) {
+  const mergedEntries = mergeGuildRankingEntries(rankings);
+  return mergedEntries.reduce((totals, entry) => ({
+    points: totals.points,
+    message_count: totals.message_count + entry.message_count,
+    character_count: totals.character_count + entry.character_count,
+    vc_seconds: totals.vc_seconds + entry.vc_seconds,
+    bump_count: totals.bump_count + entry.bump_count,
+    bump_points: totals.bump_points + entry.bump_points,
+  }), {
+    points: activeEntries.reduce((total, entry) => total + entry.points, 0),
+    message_count: 0,
+    character_count: 0,
+    vc_seconds: 0,
+    bump_count: 0,
+    bump_points: 0,
+  });
+}
+
+function mergeGuildRankingEntries(rankings) {
+  const entriesByUser = new Map();
+  for (const entries of [rankings.active, rankings.text, rankings.message, rankings.vc, rankings.bump]) {
+    for (const entry of entries) {
+      const current = entriesByUser.get(entry.user_id) ?? {
+        ...entry,
+        points: 0,
+        message_count: 0,
+        character_count: 0,
+        vc_seconds: 0,
+        bump_count: 0,
+        bump_points: 0,
+      };
+      entriesByUser.set(entry.user_id, {
+        ...current,
+        display_name: current.display_name || entry.display_name,
+        message_count: Math.max(current.message_count, entry.message_count),
+        character_count: Math.max(current.character_count, entry.character_count),
+        vc_seconds: Math.max(current.vc_seconds, entry.vc_seconds),
+        bump_count: Math.max(current.bump_count, entry.bump_count),
+        bump_points: Math.max(current.bump_points, entry.bump_points),
+      });
+    }
+  }
+  return Array.from(entriesByUser.values());
 }
 
 function activeRankingEntriesForSources(rankings, sources) {
@@ -7074,6 +7146,7 @@ function activeRankingEntriesForSources(rankings, sources) {
         character_count: 0,
         vc_seconds: 0,
         bump_count: 0,
+        bump_points: 0,
       };
       entriesByUser.set(entry.user_id, {
         ...current,
@@ -7082,6 +7155,7 @@ function activeRankingEntriesForSources(rankings, sources) {
         character_count: Math.max(current.character_count, entry.character_count),
         vc_seconds: Math.max(current.vc_seconds, entry.vc_seconds),
         bump_count: Math.max(current.bump_count, entry.bump_count),
+        bump_points: Math.max(current.bump_points, entry.bump_points),
       });
     }
   }
@@ -7132,7 +7206,7 @@ function formatRankingMetric(entry, metric) {
     return formatActivityDuration(entry.vc_seconds);
   }
   if (metric === "bump") {
-    return `${formatCompactNumber(entry.bump_count)} pt`;
+    return `${formatCompactNumber(entry.bump_count)}回 / ${formatCompactNumber(entry.bump_points)}pt`;
   }
   return `${formatCompactNumber(entry.points)} pt`;
 }
@@ -7149,7 +7223,7 @@ function rankingPointsForSources(entry, sources) {
       return total + (entry.vc_seconds > 0 ? Math.ceil(entry.vc_seconds / 60) : 0);
     }
     if (source === "bump") {
-      return total + entry.bump_count;
+      return total + entry.bump_points;
     }
     return total;
   }, 0);
@@ -7161,6 +7235,7 @@ function compareRankingEntries(left, right) {
     || right.message_count - left.message_count
     || right.character_count - left.character_count
     || right.vc_seconds - left.vc_seconds
+    || right.bump_points - left.bump_points
     || right.bump_count - left.bump_count
     || left.user_id.localeCompare(right.user_id)
   );
@@ -7171,7 +7246,8 @@ function formatRankingDetail(entry) {
     `${formatCompactNumber(entry.message_count)}件`,
     `${formatCompactNumber(entry.character_count)}文字`,
     formatActivityDuration(entry.vc_seconds),
-    `${formatCompactNumber(entry.bump_count)} BUMP`,
+    `${formatCompactNumber(entry.bump_count)}回 BUMP/UP`,
+    `${formatCompactNumber(entry.bump_points)}pt`,
   ].join(" / ");
 }
 
@@ -7482,7 +7558,7 @@ function formatVcNotificationSummary(reactionChannel, notificationChannel, role,
   return escapeHtml(parts.length ? parts.join(" / ") : "未設定");
 }
 
-function renderBumpRankSummary(channel, role, rankingChannel, settings) {
+function renderBumpRankSummary(channel, role) {
   const rows = [];
   if (channel) {
     rows.push(["再通知", `#${channel.name}`]);
@@ -7490,16 +7566,31 @@ function renderBumpRankSummary(channel, role, rankingChannel, settings) {
   if (role) {
     rows.push(["メンション", `@${role.name}`]);
   }
-  if (settings.reset_interval !== "none") {
-    const resetLabel = BUMP_RANK_RESET_INTERVALS.find((item) => item.id === settings.reset_interval)?.label;
-    rows.push(["リセット", resetLabel ?? settings.reset_interval]);
-  }
-  if (rankingChannel) {
-    rows.push(["ランキング", `#${rankingChannel.name}`]);
-  }
   if (!rows.length) {
     return "<strong>未設定</strong>";
   }
+  return `
+    <div class="bump-rank-summary__list">
+      ${rows.map(([label, value]) => `
+        <div class="bump-rank-summary__item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderActiveRankScheduleSummary(rankingChannel, settings) {
+  if (settings.reset_interval === "none") {
+    return "<strong>リセット送信なし</strong>";
+  }
+  const resetLabel = BUMP_RANK_RESET_INTERVALS.find((item) => item.id === settings.reset_interval)?.label;
+  const rows = [
+    ["周期", resetLabel ?? settings.reset_interval],
+    ["送信先", rankingChannel ? `#${rankingChannel.name}` : "未設定"],
+    ["次回リセット", settings.next_reset_at ? formatDateTime(settings.next_reset_at) : "保存後に設定"],
+  ];
   return `
     <div class="bump-rank-summary__list">
       ${rows.map(([label, value]) => `
@@ -8169,7 +8260,11 @@ function handleClick(event) {
       updateDirtyState("features");
       render();
     } else if (action === "clear-bump-rank") {
-      state.featureSettings.bump_rank = normalizeBumpRankSettings(null);
+      state.featureSettings.bump_rank = {
+        ...normalizeBumpRankSettings(state.featureSettings.bump_rank),
+        channel_id: "",
+        role_id: "",
+      };
       updateDirtyState("features");
       render();
     }

@@ -1003,6 +1003,10 @@ body.body--guard.body--status-only .app-shell--guard {
   align-content: start;
 }
 
+.active-rank-schedule-summary {
+  align-content: start;
+}
+
 .bump-rank-summary__list {
   display: grid;
   gap: 8px;
@@ -1925,6 +1929,43 @@ body.body--guard.body--status-only .app-shell--guard {
   font-weight: 780;
 }
 
+.guild-ranking-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.guild-ranking-metric-card {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.guild-ranking-metric-card span {
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.guild-ranking-metric-card strong {
+  min-width: 0;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 840;
+  overflow-wrap: anywhere;
+}
+
+.guild-ranking-metric-card small {
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
 .guild-ranking-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1996,6 +2037,7 @@ body.body--guard.body--status-only .app-shell--guard {
 
 .ranking-row__user {
   display: grid;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -2023,6 +2065,42 @@ body.body--guard.body--status-only .app-shell--guard {
   font-size: 0.82rem;
   font-weight: 820;
   text-align: right;
+  white-space: nowrap;
+}
+
+.ranking-row__breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ranking-row__chip {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.1);
+  border-radius: 999px;
+  padding: 3px 6px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.ranking-row__chip small {
+  color: var(--muted-2);
+  font-size: 0.62rem;
+  font-weight: 760;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.ranking-row__chip strong {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 820;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
@@ -4678,6 +4756,7 @@ input[type="checkbox"]:checked::before {
   .guard-feature-index__list,
   .user-page__grid,
   .activity-metric-grid,
+  .guild-ranking-metric-grid,
   .active-ranking-source-options,
   .server-rank-rule-grid,
   .guild-ranking-grid,
