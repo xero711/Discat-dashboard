@@ -734,6 +734,7 @@ root.addEventListener("pointerdown", handleDeferredRenderPointerDown, true);
 root.addEventListener("click", handleClick);
 root.addEventListener("change", handleChange);
 root.addEventListener("input", handleInput);
+root.addEventListener("focusin", handleFocusIn);
 root.addEventListener("submit", handleSubmit);
 root.addEventListener("dragover", handleDragOver);
 root.addEventListener("dragleave", handleDragLeave);
@@ -757,6 +758,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 document.addEventListener("keydown", handleKeydown);
+document.addEventListener("pointerdown", handleDocumentPointerDown, true);
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
@@ -3607,6 +3609,7 @@ function render(options = {}) {
     </div>
   `;
   updateDocumentForProduct();
+  enhanceSelectControls();
   if (state.productTransition && !state.productTransition.rendered) {
     state.productTransition = { ...state.productTransition, rendered: true };
   }
@@ -3623,7 +3626,16 @@ function render(options = {}) {
 }
 
 function shouldDeferRenderForActiveControl() {
+  if (root.querySelector("[data-combobox].combobox--open")) {
+    return true;
+  }
   const active = document.activeElement;
+  if (active instanceof HTMLElement && root.contains(active)) {
+    const activeCombo = active.closest("[data-combobox]");
+    if (activeCombo?.classList.contains("combobox--open")) {
+      return true;
+    }
+  }
   if (
     !(
       active instanceof HTMLInputElement ||
@@ -3682,6 +3694,312 @@ function flushDeferredRender() {
     return;
   }
   render({ force: true });
+}
+
+function enhanceSelectControls() {
+  root.querySelectorAll("select").forEach((select, index) => {
+    if (!(select instanceof HTMLSelectElement) || select.dataset.comboboxEnhanced === "true") {
+      return;
+    }
+    select.dataset.comboboxEnhanced = "true";
+    select.classList.add("combobox-source");
+    select.setAttribute("aria-hidden", "true");
+    select.tabIndex = -1;
+
+    const combo = document.createElement("div");
+    combo.className = "combobox";
+    combo.dataset.combobox = "";
+    combo.dataset.comboboxIndex = String(index);
+    if (select.multiple) {
+      combo.dataset.comboboxMultiple = "true";
+    }
+    if (select.disabled) {
+      combo.classList.add("combobox--disabled");
+    }
+    combo.innerHTML = renderComboBoxShell(select);
+    select.insertAdjacentElement("afterend", combo);
+    syncComboBoxFromSelect(combo);
+  });
+}
+
+function renderComboBoxShell(select) {
+  const listId = `combobox-list-${Math.random().toString(36).slice(2)}`;
+  return `
+    <div class="combobox__control" data-combobox-control>
+      <input class="combobox__input" type="text" role="combobox" aria-expanded="false" aria-controls="${listId}" aria-autocomplete="list" autocomplete="off" data-combobox-input ${select.disabled ? "disabled" : ""} />
+      <button class="combobox__toggle" type="button" data-combobox-toggle tabindex="-1" aria-label="候補を開く" ${select.disabled ? "disabled" : ""}>
+        ${icon("chevronDown")}
+      </button>
+    </div>
+    <div class="combobox__menu" id="${listId}" role="listbox" data-combobox-menu>
+      ${renderComboBoxOptions(select)}
+      <div class="combobox__empty" data-combobox-empty hidden>一致する候補がありません</div>
+    </div>
+  `;
+}
+
+function renderComboBoxOptions(select) {
+  const parts = [];
+  Array.from(select.children).forEach((child) => {
+    if (child instanceof HTMLOptGroupElement) {
+      parts.push(`<div class="combobox__group" data-combobox-group>${escapeHtml(child.label)}</div>`);
+      Array.from(child.children).forEach((option) => {
+        if (option instanceof HTMLOptionElement) {
+          parts.push(renderComboBoxOption(option, select.multiple));
+        }
+      });
+      return;
+    }
+    if (child instanceof HTMLOptionElement) {
+      parts.push(renderComboBoxOption(child, select.multiple));
+    }
+  });
+  return parts.join("");
+}
+
+function renderComboBoxOption(option, multiple) {
+  const selected = option.selected;
+  return `
+    <button class="combobox__option ${selected ? "combobox__option--selected" : ""}" type="button" role="option" aria-selected="${selected ? "true" : "false"}" data-combobox-option data-value="${escapeAttribute(option.value)}" data-label="${escapeAttribute(option.textContent ?? "")}" ${option.disabled ? "disabled" : ""}>
+      ${multiple ? `<span class="combobox__check">${selected ? "✓" : ""}</span>` : ""}
+      <span>${escapeHtml(option.textContent ?? "")}</span>
+    </button>
+  `;
+}
+
+function comboBoxSource(combo) {
+  const previous = combo.previousElementSibling;
+  return previous instanceof HTMLSelectElement ? previous : null;
+}
+
+function syncComboBoxFromSelect(combo) {
+  const select = comboBoxSource(combo);
+  const input = combo.querySelector("[data-combobox-input]");
+  if (!(select instanceof HTMLSelectElement) || !(input instanceof HTMLInputElement)) {
+    return;
+  }
+  input.value = comboBoxSelectedLabel(select);
+  combo.querySelectorAll("[data-combobox-option]").forEach((optionButton) => {
+    if (!(optionButton instanceof HTMLButtonElement)) {
+      return;
+    }
+    const selected = Array.from(select.selectedOptions).some((option) => option.value === optionButton.dataset.value);
+    optionButton.classList.toggle("combobox__option--selected", selected);
+    optionButton.setAttribute("aria-selected", selected ? "true" : "false");
+    const check = optionButton.querySelector(".combobox__check");
+    if (check) {
+      check.textContent = selected ? "✓" : "";
+    }
+  });
+}
+
+function comboBoxSelectedLabel(select) {
+  const selectedOptions = Array.from(select.selectedOptions);
+  if (select.multiple) {
+    if (selectedOptions.length === 0) {
+      return "未選択";
+    }
+    if (selectedOptions.length <= 2) {
+      return selectedOptions.map((option) => option.textContent?.trim() || option.value).join(", ");
+    }
+    return `${selectedOptions.length}項目選択中`;
+  }
+  const selected = selectedOptions[0] ?? select.options[select.selectedIndex] ?? null;
+  return selected?.textContent?.trim() || "未選択";
+}
+
+function openComboBox(combo) {
+  const select = comboBoxSource(combo);
+  if (!(select instanceof HTMLSelectElement) || select.disabled) {
+    return;
+  }
+  closeAllComboBoxes(combo);
+  combo.classList.add("combobox--open");
+  const input = combo.querySelector("[data-combobox-input]");
+  if (input instanceof HTMLInputElement) {
+    input.setAttribute("aria-expanded", "true");
+  }
+  filterComboBoxOptions(combo, "");
+}
+
+function closeComboBox(combo) {
+  if (!combo.classList.contains("combobox--open")) {
+    return;
+  }
+  combo.classList.remove("combobox--open");
+  const input = combo.querySelector("[data-combobox-input]");
+  if (input instanceof HTMLInputElement) {
+    input.setAttribute("aria-expanded", "false");
+  }
+  syncComboBoxFromSelect(combo);
+  filterComboBoxOptions(combo, "");
+  scheduleDeferredRenderFlush(120);
+}
+
+function closeAllComboBoxes(except = null) {
+  root.querySelectorAll("[data-combobox].combobox--open").forEach((combo) => {
+    if (combo !== except) {
+      closeComboBox(combo);
+    }
+  });
+}
+
+function handleComboBoxClick(target) {
+  const option = target.closest("[data-combobox-option]");
+  if (option instanceof HTMLButtonElement) {
+    selectComboBoxOption(option);
+    return true;
+  }
+  const combo = target.closest("[data-combobox]");
+  if (!combo) {
+    closeAllComboBoxes();
+    return false;
+  }
+  if (target.closest("[data-combobox-control]")) {
+    openComboBox(combo);
+    const input = combo.querySelector("[data-combobox-input]");
+    if (input instanceof HTMLInputElement) {
+      input.focus();
+      input.select();
+    }
+  }
+  return true;
+}
+
+function handleComboBoxInput(target) {
+  if (!("comboboxInput" in target.dataset)) {
+    return false;
+  }
+  const combo = target.closest("[data-combobox]");
+  if (!combo) {
+    return false;
+  }
+  openComboBox(combo);
+  filterComboBoxOptions(combo, target.value);
+  return true;
+}
+
+function handleComboBoxFocusIn(target) {
+  if (!("comboboxInput" in target.dataset)) {
+    return false;
+  }
+  const combo = target.closest("[data-combobox]");
+  if (combo) {
+    openComboBox(combo);
+  }
+  return true;
+}
+
+function handleComboBoxKeydown(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  const combo = target?.closest("[data-combobox]");
+  if (!combo) {
+    return false;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeComboBox(combo);
+    const input = combo.querySelector("[data-combobox-input]");
+    if (input instanceof HTMLInputElement) {
+      input.focus();
+    }
+    return true;
+  }
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    openComboBox(combo);
+    focusComboBoxOption(combo, 1);
+    return true;
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    openComboBox(combo);
+    focusComboBoxOption(combo, -1);
+    return true;
+  }
+  if ((event.key === "Enter" || event.key === " ") && target?.matches("[data-combobox-option]")) {
+    event.preventDefault();
+    selectComboBoxOption(target);
+    return true;
+  }
+  return false;
+}
+
+function focusComboBoxOption(combo, direction) {
+  const visibleOptions = visibleComboBoxOptions(combo);
+  if (!visibleOptions.length) {
+    return;
+  }
+  const activeIndex = visibleOptions.findIndex((option) => option === document.activeElement);
+  const nextIndex = activeIndex < 0
+    ? (direction > 0 ? 0 : visibleOptions.length - 1)
+    : (activeIndex + direction + visibleOptions.length) % visibleOptions.length;
+  visibleOptions[nextIndex].focus();
+}
+
+function visibleComboBoxOptions(combo) {
+  return Array.from(combo.querySelectorAll("[data-combobox-option]")).filter(
+    (option) => option instanceof HTMLButtonElement && !option.hidden && !option.disabled,
+  );
+}
+
+function filterComboBoxOptions(combo, query) {
+  const normalizedQuery = normalizeComboBoxSearch(query);
+  let visibleCount = 0;
+  combo.querySelectorAll("[data-combobox-option]").forEach((option) => {
+    if (!(option instanceof HTMLButtonElement)) {
+      return;
+    }
+    const label = normalizeComboBoxSearch(option.dataset.label ?? option.textContent ?? "");
+    const visible = !normalizedQuery || label.includes(normalizedQuery);
+    option.hidden = !visible;
+    if (visible) {
+      visibleCount += 1;
+    }
+  });
+  combo.querySelectorAll("[data-combobox-group]").forEach((group) => {
+    if (!(group instanceof HTMLElement)) {
+      return;
+    }
+    let sibling = group.nextElementSibling;
+    let hasVisibleOption = false;
+    while (sibling && !sibling.matches("[data-combobox-group]")) {
+      if (sibling.matches("[data-combobox-option]") && !sibling.hidden) {
+        hasVisibleOption = true;
+        break;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+    group.hidden = !hasVisibleOption;
+  });
+  const empty = combo.querySelector("[data-combobox-empty]");
+  if (empty instanceof HTMLElement) {
+    empty.hidden = visibleCount > 0;
+  }
+}
+
+function normalizeComboBoxSearch(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function selectComboBoxOption(optionButton) {
+  const combo = optionButton.closest("[data-combobox]");
+  const select = combo ? comboBoxSource(combo) : null;
+  if (!(combo instanceof HTMLElement) || !(select instanceof HTMLSelectElement) || optionButton.disabled) {
+    return;
+  }
+  const value = optionButton.dataset.value ?? "";
+  if (select.multiple) {
+    const option = Array.from(select.options).find((item) => item.value === value);
+    if (option) {
+      option.selected = !option.selected;
+    }
+    syncComboBoxFromSelect(combo);
+  } else {
+    select.value = value;
+    closeComboBox(combo);
+  }
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function renderMainContent() {
@@ -8658,14 +8976,29 @@ function handlePointerDown(event) {
 }
 
 function handleKeydown(event) {
+  if (handleComboBoxKeydown(event)) {
+    return;
+  }
   if (event.key === "Escape" && state.support.open) {
     closeSupportInquiry();
   }
 }
 
+function handleDocumentPointerDown(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target || target.closest("[data-combobox]")) {
+    return;
+  }
+  closeAllComboBoxes();
+}
+
 function handleClick(event) {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) {
+    return;
+  }
+
+  if (handleComboBoxClick(target)) {
     return;
   }
 
@@ -8959,6 +9292,10 @@ function handleInput(event) {
     return;
   }
 
+  if (target instanceof HTMLInputElement && handleComboBoxInput(target)) {
+    return;
+  }
+
   if ("playlistSeek" in target.dataset) {
     handlePlaylistSeekInput(target);
     return;
@@ -9034,6 +9371,13 @@ function handleInput(event) {
 
   if (target.dataset.settingsField) {
     updateSettingsField(target, { renderAfter: false });
+  }
+}
+
+function handleFocusIn(event) {
+  const target = event.target;
+  if (target instanceof HTMLInputElement) {
+    handleComboBoxFocusIn(target);
   }
 }
 

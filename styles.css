@@ -3282,6 +3282,132 @@ select.persistent-option-list option {
   padding: 5px 7px;
 }
 
+select.combobox-source {
+  position: absolute !important;
+  width: 1px !important;
+  min-width: 1px !important;
+  height: 1px !important;
+  min-height: 1px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.combobox {
+  position: relative;
+  width: 100%;
+}
+
+.combobox__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: stretch;
+}
+
+.combobox__input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.combobox__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid rgba(244, 218, 255, 0.2);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  padding: 0;
+  color: var(--text-strong);
+  background: rgba(17, 9, 30, 0.92);
+}
+
+.combobox__toggle:hover,
+.combobox__toggle:focus-visible {
+  border-color: rgba(111, 232, 255, 0.8);
+  background: rgba(111, 232, 255, 0.14);
+}
+
+.combobox--disabled {
+  opacity: 0.7;
+}
+
+.combobox__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 80;
+  display: none;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid rgba(111, 232, 255, 0.32);
+  border-radius: 8px;
+  padding: 6px;
+  background: rgba(13, 8, 24, 0.98);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+.combobox--open .combobox__menu {
+  display: grid;
+  gap: 4px;
+}
+
+.combobox__group {
+  padding: 8px 8px 4px;
+  color: var(--muted-2);
+  font-size: 0.74rem;
+  font-weight: 780;
+}
+
+.combobox__option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  padding: 8px 9px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 680;
+  text-align: left;
+}
+
+.combobox__option:hover,
+.combobox__option:focus-visible,
+.combobox__option--selected {
+  color: var(--text-strong);
+  background: rgba(111, 232, 255, 0.14);
+}
+
+.combobox__option:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.combobox__check {
+  display: inline-flex;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  color: var(--success);
+  font-size: 0.78rem;
+  font-weight: 860;
+}
+
+.combobox__empty {
+  padding: 12px 9px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 680;
+}
+
 textarea {
   min-height: 84px;
   padding: 10px 11px;
