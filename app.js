@@ -4073,14 +4073,20 @@ async function guardFetchJson(url, options = {}) {
 }
 
 function shouldAttachGuardAuth(rawUrl) {
+  if (!state.guard.apiBase) {
+    return false;
+  }
   try {
     const url = new URL(rawUrl, window.location.href);
-    const allowedOrigins = new Set([
-      new URL(GUARD_DEFAULT_API_BASE_URL).origin,
-      "http://localhost:8788",
-      new URL(GUARD_PUBLIC_API_BASE_URL).origin,
-    ]);
-    return allowedOrigins.has(url.origin);
+    const guardBase = new URL(state.guard.apiBase, window.location.href);
+    if (!["http:", "https:"].includes(url.protocol) || !["http:", "https:"].includes(guardBase.protocol)) {
+      return false;
+    }
+    if (url.origin !== guardBase.origin) {
+      return false;
+    }
+    const basePath = guardBase.pathname.replace(/\/+$/, "");
+    return !basePath || basePath === "/" || url.pathname === basePath || url.pathname.startsWith(`${basePath}/`);
   } catch {
     return false;
   }
