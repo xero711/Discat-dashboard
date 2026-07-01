@@ -727,7 +727,10 @@ let turnstileScriptPromise = null;
 let playlistAnimationFrameId = null;
 let lastPlaylistPointerToggleTrackId = "";
 let lastPlaylistPointerToggleAt = 0;
+let renderDeferredForActiveControl = false;
+let deferredRenderFlushTimerId = null;
 root.addEventListener("pointerdown", handlePointerDown);
+root.addEventListener("pointerdown", handleDeferredRenderPointerDown, true);
 root.addEventListener("click", handleClick);
 root.addEventListener("change", handleChange);
 root.addEventListener("input", handleInput);
@@ -735,6 +738,7 @@ root.addEventListener("submit", handleSubmit);
 root.addEventListener("dragover", handleDragOver);
 root.addEventListener("dragleave", handleDragLeave);
 root.addEventListener("drop", handleDrop);
+root.addEventListener("focusout", handleDeferredRenderFocusOut);
 ["play", "playing", "pause", "ended", "timeupdate", "seeking", "seeked", "loadedmetadata", "durationchange", "canplay"].forEach((eventName) => {
   root.addEventListener(eventName, handlePlaylistAudioEvent, true);
 });
@@ -3562,7 +3566,13 @@ function defaultServerPageId() {
   return visibleSettingsPages()[0]?.id ?? SERVER_DEFAULT_PAGE;
 }
 
-function render() {
+function render(options = {}) {
+  if (!options.force && shouldDeferRenderForActiveControl()) {
+    renderDeferredForActiveControl = true;
+    return;
+  }
+  clearDeferredRenderFlushTimer();
+  renderDeferredForActiveControl = false;
   stopPlaylistProgressLoop();
   const serviceOnly = state.activeProduct === "one" && serviceStatusOnlyActive();
   const mainContent = renderMainContent();
@@ -3610,6 +3620,68 @@ function render() {
   } else if (state.activeProduct === "guard") {
     syncGuardStatusRefresh();
   }
+}
+
+function shouldDeferRenderForActiveControl() {
+  const active = document.activeElement;
+  if (
+    !(
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLSelectElement ||
+      active instanceof HTMLTextAreaElement
+    ) ||
+    !root.contains(active) ||
+    active.disabled ||
+    active.readOnly
+  ) {
+    return false;
+  }
+  if (active instanceof HTMLInputElement) {
+    return !["button", "submit", "reset", "checkbox", "radio", "file", "hidden"].includes(active.type);
+  }
+  return true;
+}
+
+function handleDeferredRenderFocusOut() {
+  scheduleDeferredRenderFlush();
+}
+
+function handleDeferredRenderPointerDown(event) {
+  if (!renderDeferredForActiveControl) {
+    return;
+  }
+  const active = document.activeElement;
+  const target = event.target instanceof Node ? event.target : null;
+  if (active instanceof Node && target && (active === target || active.contains(target))) {
+    return;
+  }
+  scheduleDeferredRenderFlush();
+}
+
+function scheduleDeferredRenderFlush(delayMs = 100) {
+  if (!renderDeferredForActiveControl) {
+    return;
+  }
+  clearDeferredRenderFlushTimer();
+  deferredRenderFlushTimerId = window.setTimeout(() => {
+    deferredRenderFlushTimerId = null;
+    flushDeferredRender();
+  }, delayMs);
+}
+
+function clearDeferredRenderFlushTimer() {
+  if (deferredRenderFlushTimerId == null) {
+    return;
+  }
+  window.clearTimeout(deferredRenderFlushTimerId);
+  deferredRenderFlushTimerId = null;
+}
+
+function flushDeferredRender() {
+  if (!renderDeferredForActiveControl || shouldDeferRenderForActiveControl()) {
+    return;
+  }
+  render({ force: true });
 }
 
 function renderMainContent() {
