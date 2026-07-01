@@ -5074,7 +5074,7 @@ function renderGuardModerationTargetChannelsField(featureId, selectedValues, gui
     return `
       <label class="field guard-moderation-channel-field">
         <span>${escapeHtml(label)}</span>
-        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple disabled>
+        <select class="persistent-option-list" size="3" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple disabled>
           <option value="">${escapeHtml(optionText)}</option>
         </select>
         <small>追加したチャンネルでは、この機能の検知を行いません。</small>
@@ -5084,7 +5084,7 @@ function renderGuardModerationTargetChannelsField(featureId, selectedValues, gui
   return `
     <label class="field guard-moderation-channel-field">
       <span>${escapeHtml(label)}</span>
-      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple size="${Math.min(Math.max(channels.length, 3), 6)}">
+      <select class="persistent-option-list" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids" multiple size="${Math.min(Math.max(channels.length, 3), 8)}">
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${selectedIds.has(channel.id) ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
       </select>
       <small>追加したチャンネルでは、この機能の検知を行いません。</small>
@@ -5101,7 +5101,7 @@ function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedVal
     return `
       <label class="field guard-moderation-channel-field">
         <span>${escapeHtml(label)}</span>
-        <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" disabled>
+        <select class="persistent-option-list" size="3" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" disabled>
           <option value="">${escapeHtml(optionText)}</option>
         </select>
         <small>追加したチャンネルでは、この機能の検知を行いません。</small>
@@ -5121,7 +5121,7 @@ function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedVal
   return `
     <label class="field guard-moderation-channel-field">
       <span>${escapeHtml(label)}</span>
-      <select data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" ${availableChannels.length ? "" : "disabled"}>
+      <select ${renderPersistentOptionListAttributes(availableChannels)} data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="target_channel_ids_add" ${availableChannels.length ? "" : "disabled"}>
         <option value="">${availableChannels.length ? "追加するチャンネルを選択" : "追加できるチャンネルはありません"}</option>
         ${availableChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}">#${escapeHtml(channel.name)}</option>`).join("")}
       </select>
@@ -5204,7 +5204,7 @@ function renderGuardLoggingChannelField(eventId, selectedValue, guild) {
     return `
       <label class="field">
         <span>ログ送信先チャンネル</span>
-        <select data-guard-logging-event="${escapeAttribute(eventId)}" data-guard-logging-field="channel_id" disabled>
+        <select class="persistent-option-list" size="3" data-guard-logging-event="${escapeAttribute(eventId)}" data-guard-logging-field="channel_id" disabled>
           <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
         </select>
       </label>
@@ -5213,7 +5213,7 @@ function renderGuardLoggingChannelField(eventId, selectedValue, guild) {
   return `
     <label class="field">
       <span>ログ送信先チャンネル</span>
-      <select data-guard-logging-event="${escapeAttribute(eventId)}" data-guard-logging-field="channel_id">
+      <select ${renderPersistentOptionListAttributes(channels)} data-guard-logging-event="${escapeAttribute(eventId)}" data-guard-logging-field="channel_id">
         <option value="">未設定</option>
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
       </select>
@@ -5247,7 +5247,7 @@ function renderGuardVerificationChannelField(field, label, selectedValue, guild)
     return `
       <label class="field">
         <span>${escapeHtml(label)}</span>
-        <select data-guard-verification-field="${escapeAttribute(field)}" disabled>
+        <select class="persistent-option-list" size="3" data-guard-verification-field="${escapeAttribute(field)}" disabled>
           <option value="${escapeAttribute(selectedValue)}">${escapeHtml(optionText)}</option>
         </select>
       </label>
@@ -5256,7 +5256,7 @@ function renderGuardVerificationChannelField(field, label, selectedValue, guild)
   return `
     <label class="field">
       <span>${escapeHtml(label)}</span>
-      <select data-guard-verification-field="${escapeAttribute(field)}">
+      <select ${renderPersistentOptionListAttributes(channels)} data-guard-verification-field="${escapeAttribute(field)}">
         <option value="">未設定</option>
         ${channels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === selectedValue ? "selected" : ""}>#${escapeHtml(channel.name)}${channel.can_send_messages ? "" : "（送信権限なし）"}</option>`).join("")}
       </select>
@@ -6866,6 +6866,16 @@ function renderSwitch(label, field, checked) {
   `;
 }
 
+function renderPersistentOptionListAttributes(items, options = {}) {
+  const itemCount = Array.isArray(items) ? items.length : 0;
+  const includeEmpty = options.includeEmpty !== false;
+  const minRows = options.minRows ?? 3;
+  const maxRows = options.maxRows ?? 8;
+  const optionCount = itemCount + (includeEmpty ? 1 : 0);
+  const rows = Math.min(Math.max(optionCount, minRows), maxRows);
+  return `class="persistent-option-list" size="${rows}"`;
+}
+
 function renderAutoJoinRules(settings) {
   return `
     <div class="auto-rules">
@@ -6892,14 +6902,14 @@ function renderAutoJoinRule(rule, index) {
     <div class="auto-rule-row">
       <label class="field auto-rule-row__field">
         <span>VC</span>
-        <select data-auto-rule-index="${index}" data-auto-rule-field="voice_channel_id" ${!state.ttsOptions ? "disabled" : ""}>
+        <select ${renderPersistentOptionListAttributes(state.ttsOptions?.voice_channels ?? [])} data-auto-rule-index="${index}" data-auto-rule-field="voice_channel_id" ${!state.ttsOptions ? "disabled" : ""}>
           <option value="">未設定</option>
           ${(state.ttsOptions?.voice_channels ?? []).map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === rule.voice_channel_id ? "selected" : ""}>${escapeHtml(channel.name)}</option>`).join("")}
         </select>
       </label>
       <label class="field auto-rule-row__field">
         <span>テキストチャンネル</span>
-        <select data-auto-rule-index="${index}" data-auto-rule-field="text_channel_id" ${!state.ttsOptions ? "disabled" : ""}>
+        <select ${renderPersistentOptionListAttributes(state.ttsOptions?.text_channels ?? [])} data-auto-rule-index="${index}" data-auto-rule-field="text_channel_id" ${!state.ttsOptions ? "disabled" : ""}>
           <option value="">${readVoiceChannelChat ? "VC内チャットの読み上げのみ" : "未設定"}</option>
           ${(state.ttsOptions?.text_channels ?? []).map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === rule.text_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
         </select>
@@ -7004,7 +7014,7 @@ function renderWelcomeMessageSettings(textChannels) {
         </label>
         <label class="field">
           <span>送信先チャンネル</span>
-          <select data-welcome-message-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-welcome-message-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
@@ -7061,7 +7071,7 @@ function renderGlobalChatSettings(textChannels) {
       <div class="settings-grid">
         <label class="field">
           <span>チャンネル</span>
-          <select data-feature-field="global_chat_channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-feature-field="global_chat_channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === state.featureSettings.global_chat_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
@@ -7118,7 +7128,7 @@ function renderStickyMessageRule(rule, index, textChannels) {
     <div class="sticky-row">
       <label class="field sticky-row__channel">
         <span>チャンネル</span>
-        <select data-sticky-index="${index}" data-sticky-field="channel_id" ${!state.ttsOptions ? "disabled" : ""}>
+        <select ${renderPersistentOptionListAttributes(textChannels)} data-sticky-index="${index}" data-sticky-field="channel_id" ${!state.ttsOptions ? "disabled" : ""}>
           <option value="">未設定</option>
           ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === rule.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
         </select>
@@ -7153,14 +7163,14 @@ function renderVcNotificationSettings(textChannels, roles) {
       <div class="settings-grid">
         <label class="field">
           <span>リアクション案内チャンネル</span>
-          <select data-vc-notification-field="reaction_channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-vc-notification-field="reaction_channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.reaction_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
         </label>
         <label class="field">
           <span>VC参加通知チャンネル</span>
-          <select data-vc-notification-field="notification_channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-vc-notification-field="notification_channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.notification_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
@@ -7209,14 +7219,14 @@ function renderTemporaryVoiceSettings(voiceChannels, categories) {
       <div class="settings-grid">
         <label class="field">
           <span>登録VC</span>
-          <select data-temporary-voice-field="trigger_channel_id" ${optionsLoading ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(voiceChannels)} data-temporary-voice-field="trigger_channel_id" ${optionsLoading ? "disabled" : ""}>
             <option value="">未設定</option>
             ${voiceChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.trigger_channel_id ? "selected" : ""}>${escapeHtml(channel.name)}</option>`).join("")}
           </select>
         </label>
         <label class="field">
           <span>作成先カテゴリ</span>
-          <select data-temporary-voice-field="category_id" ${optionsLoading ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(categories)} data-temporary-voice-field="category_id" ${optionsLoading ? "disabled" : ""}>
             <option value="">未設定</option>
             ${categories.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === settings.category_id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
           </select>
@@ -7277,7 +7287,7 @@ function renderTicketSettings(categories, textChannels, roles) {
       <div class="settings-grid">
         <label class="field">
           <span>チケットカテゴリ</span>
-          <select data-ticket-field="category_id" ${optionsLoading ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(categories)} data-ticket-field="category_id" ${optionsLoading ? "disabled" : ""}>
             <option value="">未設定</option>
             ${categories.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === settings.category_id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
           </select>
@@ -7291,14 +7301,14 @@ function renderTicketSettings(categories, textChannels, roles) {
         </label>
         <label class="field">
           <span>ログチャンネル</span>
-          <select data-ticket-field="log_channel_id" ${optionsLoading ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-ticket-field="log_channel_id" ${optionsLoading ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.log_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
         </label>
         <label class="field">
           <span>パネル送信先</span>
-          <select data-ticket-field="panel_channel_id" ${optionsLoading ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-ticket-field="panel_channel_id" ${optionsLoading ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.panel_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
@@ -7367,7 +7377,7 @@ function renderBumpRankSettings(textChannels, roles) {
       <div class="settings-grid">
         <label class="field">
           <span>再通知チャンネル</span>
-          <select data-bump-rank-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-bump-rank-field="channel_id" ${selectedGuildCanConfigure() && !state.ttsOptions ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>
@@ -7426,7 +7436,7 @@ function renderServerRankSettings(textChannels) {
         </label>
         <label class="field">
           <span>リセット時ランキング送信チャンネル</span>
-          <select data-bump-rank-field="ranking_channel_id" ${!resetEnabled || (selectedGuildCanConfigure() && !state.ttsOptions) ? "disabled" : ""}>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-bump-rank-field="ranking_channel_id" ${!resetEnabled || (selectedGuildCanConfigure() && !state.ttsOptions) ? "disabled" : ""}>
             <option value="">未設定</option>
             ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.ranking_channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
           </select>

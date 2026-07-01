@@ -3271,6 +3271,17 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(111, 232, 255, 0.16);
 }
 
+select.persistent-option-list {
+  min-height: 128px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  line-height: 1.45;
+}
+
+select.persistent-option-list option {
+  padding: 5px 7px;
+}
+
 textarea {
   min-height: 84px;
   padding: 10px 11px;
