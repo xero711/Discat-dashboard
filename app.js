@@ -4054,6 +4054,10 @@ async function guardFetchJson(url, options = {}) {
   if (hasBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  const token = getAuthToken();
+  if (token && !headers.has("Authorization") && shouldAttachGuardAuth(url)) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   let response;
   try {
     response = await fetch(url, { ...options, headers, cache: "no-store" });
@@ -4066,6 +4070,20 @@ async function guardFetchJson(url, options = {}) {
     throw new Error(detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`);
   }
   return response.json();
+}
+
+function shouldAttachGuardAuth(rawUrl) {
+  try {
+    const url = new URL(rawUrl, window.location.href);
+    const allowedOrigins = new Set([
+      new URL(GUARD_DEFAULT_API_BASE_URL).origin,
+      "http://localhost:8788",
+      new URL(GUARD_PUBLIC_API_BASE_URL).origin,
+    ]);
+    return allowedOrigins.has(url.origin);
+  } catch {
+    return false;
+  }
 }
 
 function guardConnectionErrorMessage(rawUrl) {
