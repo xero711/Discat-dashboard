@@ -2645,7 +2645,7 @@ body.body--guard.body--status-only .app-shell--guard {
 }
 
 .host-admin {
-  gap: 14px;
+  gap: 18px;
 }
 
 .host-admin__toolbar {
@@ -2653,6 +2653,86 @@ body.body--guard.body--status-only .app-shell--guard {
   flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
+}
+
+.host-admin-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.host-admin-tab {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+  min-height: 70px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.026)),
+    rgba(255, 255, 255, 0.04);
+  color: var(--muted-2);
+  text-align: left;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.host-admin-tab:hover {
+  border-color: rgba(111, 232, 255, 0.38);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.host-admin-tab--active {
+  border-color: rgba(117, 245, 186, 0.48);
+  background:
+    linear-gradient(135deg, rgba(117, 245, 186, 0.16), rgba(111, 232, 255, 0.1)),
+    rgba(255, 255, 255, 0.05);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+}
+
+.host-admin-tab .svg-icon {
+  color: var(--cyan);
+}
+
+.host-admin-tab span,
+.host-admin-tab strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.host-admin-tab span {
+  font-size: 0.92rem;
+  font-weight: 840;
+  line-height: 1.25;
+}
+
+.host-admin-tab strong {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.host-admin-tab--active strong {
+  color: var(--success);
+}
+
+.host-admin__tab-panel {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
 }
 
 .refresh-pill {
@@ -3099,6 +3179,161 @@ body.body--guard.body--status-only .app-shell--guard {
   display: grid;
   gap: 10px;
   padding: 0 12px 12px;
+}
+
+.host-database {
+  gap: 14px;
+}
+
+.host-database__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.host-database-categories {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+}
+
+.host-database-category {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid rgba(244, 218, 255, 0.12);
+  border-radius: 8px;
+  padding: 0 11px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(17, 9, 30, 0.24)),
+    rgba(17, 9, 30, 0.18);
+  color: var(--muted-2);
+  text-align: left;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease;
+}
+
+.host-database-category:hover {
+  border-color: rgba(111, 232, 255, 0.32);
+  color: var(--text);
+}
+
+.host-database-category--active {
+  border-color: rgba(117, 245, 186, 0.38);
+  background:
+    linear-gradient(135deg, rgba(117, 245, 186, 0.12), rgba(111, 232, 255, 0.08)),
+    rgba(255, 255, 255, 0.045);
+  color: var(--text-strong);
+}
+
+.host-database-category .svg-icon {
+  color: var(--cyan);
+}
+
+.host-database-category span,
+.host-database-category strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-database-category span {
+  font-size: 0.82rem;
+  font-weight: 820;
+}
+
+.host-database-category strong {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 760;
+}
+
+.host-database-category--active strong {
+  color: var(--success);
+}
+
+.host-database-file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.host-database-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(88px, 0.35fr) minmax(92px, auto) minmax(128px, auto);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid rgba(244, 218, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(17, 9, 30, 0.26)),
+    rgba(17, 9, 30, 0.2);
+}
+
+.host-database-file-row__path {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.host-database-file-row__path strong,
+.host-database-file-row__path small,
+.host-database-file-row__category,
+.host-database-file-row__size,
+.host-database-file-row__updated {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-database-file-row__path strong {
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  font-weight: 840;
+}
+
+.host-database-file-row__path small {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.host-database-file-row__category {
+  justify-self: start;
+  border: 1px solid rgba(111, 232, 255, 0.16);
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: rgba(111, 232, 255, 0.08);
+  color: var(--cyan);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.host-database-file-row__size {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  font-weight: 850;
+  text-align: right;
+}
+
+.host-database-file-row__updated {
+  color: var(--muted-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: right;
 }
 
 .detail-list {
@@ -4834,7 +5069,10 @@ input[type="checkbox"]:checked::before {
   .settings-grid,
   .host-overview,
   .host-metrics,
+  .host-admin-tabs,
   .host-admin__grid,
+  .host-database__summary,
+  .host-database-categories,
   .guard-panel-grid,
   .guard-moderation-grid,
   .guard-moderation-card__fields,
@@ -4855,6 +5093,30 @@ input[type="checkbox"]:checked::before {
 
   .host-log-row {
     grid-template-columns: 1fr;
+  }
+
+  .host-database-file-row {
+    grid-template-columns: 1fr;
+  }
+
+  .host-database-file-row__size,
+  .host-database-file-row__updated {
+    justify-self: start;
+    text-align: left;
+  }
+
+  .host-card__header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .host-card__header .feature-status {
+    margin-left: 0;
+  }
+
+  .detail-list div {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .host-playlist-user__summary {
@@ -4915,6 +5177,10 @@ input[type="checkbox"]:checked::before {
 
   .user-panel-tab strong {
     grid-column: 2;
+  }
+
+  .host-admin-tab {
+    min-height: 62px;
   }
 
   .playlist-spotlight__record {

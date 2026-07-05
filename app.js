@@ -66,6 +66,22 @@ const USER_PANEL_TABS = [
   { id: "playlist", label: "プレイリスト", icon: "music" },
   { id: "activity", label: "アクティビティ", icon: "activity" },
 ];
+const HOST_ADMIN_TABS = [
+  { id: "bot", label: "BOT詳細", icon: "activity" },
+  { id: "playlists", label: "ユーザープレイリスト", icon: "music" },
+  { id: "logs", label: "操作ログ", icon: "history" },
+  { id: "database", label: "データベース", icon: "folder" },
+];
+const HOST_DATABASE_CATEGORIES = [
+  { id: "all", label: "すべて", icon: "folder" },
+  { id: "api", label: "API", icon: "server" },
+  { id: "settings", label: "設定", icon: "settings" },
+  { id: "playlist", label: "プレイリスト", icon: "music" },
+  { id: "runtime", label: "ランタイム", icon: "activity" },
+  { id: "logs", label: "ログ", icon: "history" },
+  { id: "tts", label: "TTS", icon: "volume" },
+  { id: "other", label: "その他", icon: "folder" },
+];
 const SERVER_DEFAULT_PAGE = "welcome-message";
 const ACTIVITY_PERIODS = [
   { id: "daily", label: "日別", summary: "直近7日" },
@@ -586,6 +602,8 @@ const state = {
   hostInviteRunning: null,
   hostInviteLinks: {},
   hostLastUpdatedAt: null,
+  activeHostAdminTab: "bot",
+  activeHostDatabaseCategory: "all",
   adminPlaylists: [],
   adminPlaylistsLoading: false,
   adminPlaylistsError: null,
@@ -2053,21 +2071,23 @@ function isHttpUrl(value) {
 }
 
 function normalizeHostStatus(status) {
+  const dataStats = {
+    guild_settings_count: 0,
+    tts_settings_count: 0,
+    tts_voice_cache_count: 0,
+    audit_log_bytes: 0,
+    session_store_bytes: 0,
+    host_control_log_bytes: 0,
+    ...(status?.data_stats ?? {}),
+  };
   return {
     ...status,
     api_latency_ms: Number(status?.api_latency_ms ?? 0),
     root_dir: status?.root_dir ?? "",
     data_dir_total_bytes: Number(status?.data_dir_total_bytes ?? 0),
     data_dir_used_bytes: Number(status?.data_dir_used_bytes ?? 0),
-    data_stats: {
-      guild_settings_count: 0,
-      tts_settings_count: 0,
-      tts_voice_cache_count: 0,
-      audit_log_bytes: 0,
-      session_store_bytes: 0,
-      host_control_log_bytes: 0,
-      ...(status?.data_stats ?? {}),
-    },
+    data_stats: dataStats,
+    database_files: normalizeHostDatabaseFiles(status?.database_files ?? status?.data_files, dataStats),
     configuration: {
       api_host: "",
       dashboard_allowed_origins: [],
@@ -2085,6 +2105,101 @@ function normalizeHostStatus(status) {
         }
       : null,
   };
+}
+
+function normalizeHostDatabaseFiles(files, dataStats = {}) {
+  const source = Array.isArray(files)
+    ? files
+    : files && typeof files === "object"
+      ? Object.entries(files).map(([path, value]) => (
+          value && typeof value === "object"
+            ? { path, ...value }
+            : { path, size_bytes: value }
+        ))
+      : [];
+  const normalized = source
+    .map(normalizeHostDatabaseFile)
+    .filter((file) => file.path && Number.isFinite(file.size_bytes));
+  return sortHostDatabaseFiles(normalized.length ? normalized : fallbackHostDatabaseFiles(dataStats));
+}
+
+function normalizeHostDatabaseFile(file, index = 0) {
+  const rawPath = String(file?.relative_path ?? file?.path ?? file?.name ?? "").trim();
+  const path = rawPath || `database-file-${index + 1}`;
+  const name = String(file?.name ?? path.split(/[\\/]/).pop() ?? path).trim() || path;
+  const size = Number(file?.size_bytes ?? file?.bytes ?? file?.size ?? 0);
+  return {
+    path,
+    name,
+    category: normalizeHostDatabaseCategory(file?.category ?? file?.type ?? "", path),
+    size_bytes: Number.isFinite(size) && size >= 0 ? size : 0,
+    modified_at: file?.modified_at ?? file?.updated_at ?? file?.mtime ?? null,
+    fallback: Boolean(file?.fallback),
+  };
+}
+
+function fallbackHostDatabaseFiles(dataStats = {}) {
+  return [
+    {
+      path: "api/audit_logs.jsonl",
+      name: "audit_logs.jsonl",
+      category: "logs",
+      size_bytes: Number(dataStats.audit_log_bytes ?? 0),
+      modified_at: null,
+      fallback: true,
+    },
+    {
+      path: "api/sessions.json",
+      name: "sessions.json",
+      category: "api",
+      size_bytes: Number(dataStats.session_store_bytes ?? 0),
+      modified_at: null,
+      fallback: true,
+    },
+    {
+      path: "api/host_control_logs.jsonl",
+      name: "host_control_logs.jsonl",
+      category: "logs",
+      size_bytes: Number(dataStats.host_control_log_bytes ?? 0),
+      modified_at: null,
+      fallback: true,
+    },
+  ].filter((file) => Number.isFinite(file.size_bytes));
+}
+
+function normalizeHostDatabaseCategory(value, path = "") {
+  const category = String(value ?? "").toLowerCase().trim();
+  if (HOST_DATABASE_CATEGORIES.some((item) => item.id === category && item.id !== "all")) {
+    return category;
+  }
+  const normalizedPath = String(path ?? "").replace(/\\/g, "/").toLowerCase();
+  if (normalizedPath.includes("/guild_settings/") || normalizedPath.includes("settings")) {
+    return "settings";
+  }
+  if (normalizedPath.includes("/playlists/") || normalizedPath.includes("playlist")) {
+    return "playlist";
+  }
+  if (normalizedPath.includes("/runtime/") || normalizedPath.includes("bot_status")) {
+    return "runtime";
+  }
+  if (normalizedPath.includes("/tts_data/") || normalizedPath.includes("tts")) {
+    return "tts";
+  }
+  if (normalizedPath.includes("log")) {
+    return "logs";
+  }
+  if (normalizedPath.startsWith("api/") || normalizedPath.includes("/api/")) {
+    return "api";
+  }
+  return "other";
+}
+
+function sortHostDatabaseFiles(files) {
+  return [...files].sort((left, right) => (
+    right.size_bytes - left.size_bytes
+    || left.category.localeCompare(right.category)
+    || left.path.localeCompare(right.path)
+  ));
 }
 
 function normalizeBotGuilds(guilds) {
@@ -3426,6 +3541,8 @@ function resetSessionState() {
   state.hostInviteRunning = null;
   state.hostInviteLinks = {};
   state.hostLastUpdatedAt = null;
+  state.activeHostAdminTab = "bot";
+  state.activeHostDatabaseCategory = "all";
   state.adminPlaylists = [];
   state.adminPlaylistsLoading = false;
   state.adminPlaylistsError = null;
@@ -4287,7 +4404,7 @@ function renderDashboard() {
     view === "user"
       ? escapeHtml(state.user?.username ?? "ユーザー")
       : view === "host"
-        ? "BOT詳細"
+        ? "管理者用"
         : canConfigure
           ? escapeHtml(guild?.name ?? "")
           : "サーバーを選択";
@@ -8113,13 +8230,14 @@ function formatRankingDetail(entry) {
 function renderHostAdminPanel() {
   const status = state.hostStatus;
   const bot = status?.bot_status ?? null;
+  const activeTab = normalizedHostAdminTab();
   const autoRefreshLabel = `自動更新 ${Math.round(HOST_REFRESH_INTERVAL_MS / 1000)}秒`;
   const refreshBusy = state.hostLoading || state.adminPlaylistsLoading;
   return `
     <section class="settings-panel host-admin" aria-label="BOT管理者用ページ">
       <div class="settings-panel__header">
         <div class="panel-heading">
-          ${icon("activity")}<h2>BOT詳細</h2>
+          ${icon("activity")}<h2>管理者用</h2>
         </div>
         <div class="host-admin__toolbar">
           <span class="refresh-pill ${refreshBusy ? "refresh-pill--loading" : ""}">
@@ -8133,102 +8251,269 @@ function renderHostAdminPanel() {
       ${
         status
           ? `
-            ${renderHostOverview(status, bot)}
-            <div class="host-metrics">
-              ${renderMetricTile("BOT起動時間", formatDuration(bot?.uptime_seconds), formatDateTime(bot?.started_at), Boolean(bot?.online))}
-              ${renderMetricTile("Discord Ping", bot?.latency_ms == null ? "測定中" : `${bot.latency_ms}ms`, `${bot?.guild_count ?? 0}サーバー / ${bot?.voice_connection_count ?? 0}VC`, Boolean(bot?.online))}
-              ${renderMetricTile("API起動時間", formatDuration(status.uptime_seconds), `PID ${status.process_id}`, true)}
-              ${renderMetricTile("データ空き容量", formatBytes(status.data_dir_free_bytes), `${formatBytes(status.data_dir_used_bytes)} 使用中`, status.data_dir_free_bytes > 0)}
+            ${renderHostAdminTabs(activeTab, status)}
+            <div class="host-admin__tab-panel" role="tabpanel" id="host-admin-panel-${escapeAttribute(activeTab)}" aria-labelledby="host-admin-tab-${escapeAttribute(activeTab)}">
+              ${renderHostAdminTabPanel(activeTab, status, bot)}
             </div>
-            ${renderAdminGuildAccessPanel({
-              botLabel: "Discat One",
-              guilds: bot?.guilds ?? [],
-              inviteLinks: state.hostInviteLinks,
-              inviteRunningId: state.hostInviteRunning,
-              action: "create-host-guild-invite",
-            })}
-            <div class="host-admin__grid">
-              <section class="host-card">
-                <div class="host-card__header">
-                  ${icon("bot")}<h3>BOTランタイム</h3>
-                </div>
-                ${renderDetailList([
-                  ["ユーザー", bot?.username ?? "未取得"],
-                  ["BOT ID", bot?.user_id ?? "未取得"],
-                  ["BOT PID", bot?.process_id ?? "未取得"],
-                  ["最終Ready", formatDateTime(bot?.last_ready_at)],
-                  ["最終更新", formatDateTime(bot?.status_updated_at)],
-                  ["同期済み", bot?.command_sync_completed ? "はい" : "いいえ"],
-                  ["Slash Commands", bot?.slash_command_count ?? 0],
-                  ["読み込みCog", (bot?.loaded_extensions ?? []).length ? bot.loaded_extensions.join(", ") : "未取得"],
-                ])}
-              </section>
-              <section class="host-card">
-                <div class="host-card__header">
-                  ${icon("server")}<h3>API / ホスト</h3>
-                </div>
-                ${renderDetailList([
-                  ["ホスト名", status.hostname],
-                  ["Python", status.python_version],
-                  ["API起動", formatDateTime(status.api_started_at)],
-                  ["処理時間", `${status.api_latency_ms.toFixed(2)}ms`],
-                  ["公開ポート", status.public_api_port],
-                  ["UPnP", status.upnp_enabled ? "有効" : "無効"],
-                  ["UPnPリース", formatDuration(status.configuration.upnp_lease_seconds)],
-                ])}
-              </section>
-              <section class="host-card">
-                <div class="host-card__header">
-                  ${icon("folder")}<h3>データ</h3>
-                </div>
-                ${renderDetailList([
-                  ["データフォルダ", status.data_dir],
-                  ["プロジェクト", status.root_dir],
-                  ["総容量", formatBytes(status.data_dir_total_bytes)],
-                  ["サーバー設定", `${status.data_stats.guild_settings_count}件`],
-                  ["読み上げ設定", `${status.data_stats.tts_settings_count}件`],
-                  ["音声キャッシュ", `${status.data_stats.tts_voice_cache_count}件`],
-                  ["監査ログ", formatBytes(status.data_stats.audit_log_bytes)],
-                  ["セッション保存", formatBytes(status.data_stats.session_store_bytes)],
-                ])}
-              </section>
-              <section class="host-card">
-                <div class="host-card__header">
-                  ${icon("settings")}<h3>細かな設定</h3>
-                </div>
-                ${renderDetailList([
-                  ["ダッシュボード", status.dashboard_url],
-                  ["API Host", status.configuration.api_host],
-                  ["許可Origin", status.configuration.dashboard_allowed_origins.join(", ")],
-                  ["PC操作", status.configuration.host_control_enabled ? "有効" : "無効"],
-                  ["許可ユーザー", `${status.configuration.host_control_allowed_user_count}人`],
-                  ["JWT有効期限", `${status.configuration.jwt_access_token_minutes}分`],
-                  ["セッションTTL", formatDuration(status.configuration.session_ttl_seconds)],
-                ])}
-              </section>
-            </div>
-            ${renderAdminPlaylistsPanel()}
-            <section class="host-card host-card--actions">
-              <div class="host-card__header">
-                ${icon("terminal")}<h3>PC操作</h3>
-              </div>
-              <div class="host-actions">
-                ${renderHostActionButton("open_dashboard", "ダッシュボードを開く", "external")}
-                ${renderHostActionButton("open_data_dir", "データフォルダを開く", "folder")}
-                ${renderHostActionButton("refresh_upnp", "UPnP更新", "refresh")}
-              </div>
-            </section>
-            <section class="host-card">
-              <div class="host-card__header">
-                ${icon("history")}<h3>操作ログ</h3>
-              </div>
-              ${renderHostLogs()}
-            </section>
           `
           : `<div class="empty-state">${state.hostLoading ? "管理者用情報を取得中です。" : "管理者用情報はまだ取得されていません。"}</div>`
       }
     </section>
   `;
+}
+
+function normalizedHostAdminTab() {
+  return HOST_ADMIN_TABS.some((tab) => tab.id === state.activeHostAdminTab)
+    ? state.activeHostAdminTab
+    : "bot";
+}
+
+function renderHostAdminTabs(activeTab, status) {
+  return `
+    <div class="host-admin-tabs" role="tablist" aria-label="管理者用ページ表示">
+      ${HOST_ADMIN_TABS.map((tab) => {
+        const selected = activeTab === tab.id;
+        return `
+          <button
+            id="host-admin-tab-${escapeAttribute(tab.id)}"
+            class="host-admin-tab ${selected ? "host-admin-tab--active" : ""}"
+            type="button"
+            role="tab"
+            aria-selected="${selected}"
+            aria-controls="host-admin-panel-${escapeAttribute(tab.id)}"
+            data-host-admin-tab="${escapeAttribute(tab.id)}"
+          >
+            ${icon(tab.icon)}
+            <span>${escapeHtml(tab.label)}</span>
+            <strong>${escapeHtml(hostAdminTabMeta(tab.id, status))}</strong>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function hostAdminTabMeta(tabId, status) {
+  if (tabId === "playlists") {
+    const totalTracks = state.adminPlaylists.reduce((total, playlist) => total + (playlist.tracks?.length ?? 0), 0);
+    return state.adminPlaylistsLoading ? "取得中" : `${state.adminPlaylists.length}人 / ${totalTracks}曲`;
+  }
+  if (tabId === "logs") {
+    return `${state.hostLogs.length}件`;
+  }
+  if (tabId === "database") {
+    const files = status?.database_files ?? [];
+    const totalBytes = files.reduce((total, file) => total + (file.size_bytes ?? 0), 0);
+    return `${files.length}ファイル / ${formatBytes(totalBytes)}`;
+  }
+  return botStatusLabel(status?.bot_status ?? null);
+}
+
+function renderHostAdminTabPanel(activeTab, status, bot) {
+  if (activeTab === "playlists") {
+    return renderAdminPlaylistsPanel();
+  }
+  if (activeTab === "logs") {
+    return `
+      <section class="host-card host-logs">
+        <div class="host-card__header">
+          ${icon("history")}<h3>操作ログ</h3>
+          <span class="feature-status ${state.hostLogs.length ? "feature-status--on" : ""}">
+            ${escapeHtml(`${state.hostLogs.length}件`)}
+          </span>
+        </div>
+        ${renderHostLogs()}
+      </section>
+    `;
+  }
+  if (activeTab === "database") {
+    return renderHostDatabasePanel(status);
+  }
+  return renderHostBotDetailsTab(status, bot);
+}
+
+function renderHostBotDetailsTab(status, bot) {
+  return `
+    ${renderHostOverview(status, bot)}
+    <div class="host-metrics">
+      ${renderMetricTile("BOT起動時間", formatDuration(bot?.uptime_seconds), formatDateTime(bot?.started_at), Boolean(bot?.online))}
+      ${renderMetricTile("Discord Ping", bot?.latency_ms == null ? "測定中" : `${bot.latency_ms}ms`, `${bot?.guild_count ?? 0}サーバー / ${bot?.voice_connection_count ?? 0}VC`, Boolean(bot?.online))}
+      ${renderMetricTile("API起動時間", formatDuration(status.uptime_seconds), `PID ${status.process_id}`, true)}
+      ${renderMetricTile("データ空き容量", formatBytes(status.data_dir_free_bytes), `${formatBytes(status.data_dir_used_bytes)} 使用中`, status.data_dir_free_bytes > 0)}
+    </div>
+    ${renderAdminGuildAccessPanel({
+      botLabel: "Discat One",
+      guilds: bot?.guilds ?? [],
+      inviteLinks: state.hostInviteLinks,
+      inviteRunningId: state.hostInviteRunning,
+      action: "create-host-guild-invite",
+    })}
+    <div class="host-admin__grid">
+      <section class="host-card">
+        <div class="host-card__header">
+          ${icon("bot")}<h3>BOTランタイム</h3>
+        </div>
+        ${renderDetailList([
+          ["ユーザー", bot?.username ?? "未取得"],
+          ["BOT ID", bot?.user_id ?? "未取得"],
+          ["BOT PID", bot?.process_id ?? "未取得"],
+          ["最終Ready", formatDateTime(bot?.last_ready_at)],
+          ["最終更新", formatDateTime(bot?.status_updated_at)],
+          ["同期済み", bot?.command_sync_completed ? "はい" : "いいえ"],
+          ["Slash Commands", bot?.slash_command_count ?? 0],
+          ["読み込みCog", (bot?.loaded_extensions ?? []).length ? bot.loaded_extensions.join(", ") : "未取得"],
+        ])}
+      </section>
+      <section class="host-card">
+        <div class="host-card__header">
+          ${icon("server")}<h3>API / ホスト</h3>
+        </div>
+        ${renderDetailList([
+          ["ホスト名", status.hostname],
+          ["Python", status.python_version],
+          ["API起動", formatDateTime(status.api_started_at)],
+          ["処理時間", `${status.api_latency_ms.toFixed(2)}ms`],
+          ["公開ポート", status.public_api_port],
+          ["UPnP", status.upnp_enabled ? "有効" : "無効"],
+          ["UPnPリース", formatDuration(status.configuration.upnp_lease_seconds)],
+        ])}
+      </section>
+      <section class="host-card">
+        <div class="host-card__header">
+          ${icon("settings")}<h3>細かな設定</h3>
+        </div>
+        ${renderDetailList([
+          ["ダッシュボード", status.dashboard_url],
+          ["API Host", status.configuration.api_host],
+          ["許可Origin", status.configuration.dashboard_allowed_origins.join(", ")],
+          ["PC操作", status.configuration.host_control_enabled ? "有効" : "無効"],
+          ["許可ユーザー", `${status.configuration.host_control_allowed_user_count}人`],
+          ["JWT有効期限", `${status.configuration.jwt_access_token_minutes}分`],
+          ["セッションTTL", formatDuration(status.configuration.session_ttl_seconds)],
+        ])}
+      </section>
+      <section class="host-card host-card--actions">
+        <div class="host-card__header">
+          ${icon("terminal")}<h3>PC操作</h3>
+        </div>
+        <div class="host-actions">
+          ${renderHostActionButton("open_dashboard", "ダッシュボードを開く", "external")}
+          ${renderHostActionButton("open_data_dir", "データフォルダを開く", "folder")}
+          ${renderHostActionButton("refresh_upnp", "UPnP更新", "refresh")}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderHostDatabasePanel(status) {
+  const files = status?.database_files ?? [];
+  const activeCategory = normalizedHostDatabaseCategoryFilter();
+  const visibleFiles = activeCategory === "all"
+    ? files
+    : files.filter((file) => file.category === activeCategory);
+  const totalBytes = files.reduce((total, file) => total + (file.size_bytes ?? 0), 0);
+  const visibleBytes = visibleFiles.reduce((total, file) => total + (file.size_bytes ?? 0), 0);
+  return `
+    <section class="host-card host-database">
+      <div class="host-card__header">
+        ${icon("folder")}<h3>データベース</h3>
+        <span class="feature-status ${files.length ? "feature-status--on" : ""}">
+          ${escapeHtml(`${files.length}ファイル`)}
+        </span>
+      </div>
+      <div class="host-database__summary">
+        ${renderMetricTile("データフォルダ", status.data_dir, status.root_dir, true)}
+        ${renderMetricTile("総ファイルサイズ", formatBytes(totalBytes), `${formatBytes(status.data_dir_used_bytes)} 使用中`, files.length > 0)}
+        ${renderMetricTile("選択中", formatBytes(visibleBytes), `${visibleFiles.length}ファイル`, visibleFiles.length > 0)}
+      </div>
+      ${renderDetailList([
+        ["データフォルダ", status.data_dir],
+        ["プロジェクト", status.root_dir],
+        ["ディスク総容量", formatBytes(status.data_dir_total_bytes)],
+        ["ディスク空き容量", formatBytes(status.data_dir_free_bytes)],
+        ["サーバー設定", `${status.data_stats.guild_settings_count}件`],
+        ["読み上げ設定", `${status.data_stats.tts_settings_count}件`],
+        ["音声キャッシュ", `${status.data_stats.tts_voice_cache_count}件`],
+      ])}
+      ${renderHostDatabaseCategoryTabs(files, activeCategory)}
+      ${renderHostDatabaseFileList(visibleFiles)}
+    </section>
+  `;
+}
+
+function normalizedHostDatabaseCategoryFilter() {
+  return HOST_DATABASE_CATEGORIES.some((category) => category.id === state.activeHostDatabaseCategory)
+    ? state.activeHostDatabaseCategory
+    : "all";
+}
+
+function renderHostDatabaseCategoryTabs(files, activeCategory) {
+  const stats = hostDatabaseCategoryStats(files);
+  return `
+    <div class="host-database-categories" role="tablist" aria-label="データベースファイル分類">
+      ${HOST_DATABASE_CATEGORIES.map((category) => {
+        const selected = activeCategory === category.id;
+        const stat = stats.get(category.id) ?? { count: 0, bytes: 0 };
+        return `
+          <button
+            class="host-database-category ${selected ? "host-database-category--active" : ""}"
+            type="button"
+            role="tab"
+            aria-selected="${selected}"
+            data-host-database-category="${escapeAttribute(category.id)}"
+          >
+            ${icon(category.icon)}
+            <span>${escapeHtml(category.label)}</span>
+            <strong>${escapeHtml(`${stat.count}件`)}</strong>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function hostDatabaseCategoryStats(files) {
+  const stats = new Map(HOST_DATABASE_CATEGORIES.map((category) => [category.id, { count: 0, bytes: 0 }]));
+  files.forEach((file) => {
+    const fileBytes = Number(file.size_bytes ?? 0);
+    const category = stats.get(file.category) ?? stats.get("other");
+    const all = stats.get("all");
+    category.count += 1;
+    category.bytes += fileBytes;
+    all.count += 1;
+    all.bytes += fileBytes;
+  });
+  return stats;
+}
+
+function renderHostDatabaseFileList(files) {
+  if (!files.length) {
+    return `<div class="empty-state">選択中の分類に該当するデータベースファイルはありません。</div>`;
+  }
+  return `
+    <div class="host-database-file-list">
+      ${files.map(renderHostDatabaseFileRow).join("")}
+    </div>
+  `;
+}
+
+function renderHostDatabaseFileRow(file) {
+  return `
+    <article class="host-database-file-row">
+      <div class="host-database-file-row__path">
+        <strong>${escapeHtml(file.name)}</strong>
+        <small>${escapeHtml(file.path)}</small>
+      </div>
+      <span class="host-database-file-row__category">${escapeHtml(hostDatabaseCategoryLabel(file.category))}</span>
+      <strong class="host-database-file-row__size">${escapeHtml(formatBytes(file.size_bytes))}</strong>
+      <small class="host-database-file-row__updated">${escapeHtml(file.modified_at ? formatDateTime(file.modified_at) : file.fallback ? "既存集計" : "更新日時未取得")}</small>
+    </article>
+  `;
+}
+
+function hostDatabaseCategoryLabel(categoryId) {
+  return HOST_DATABASE_CATEGORIES.find((category) => category.id === categoryId)?.label ?? "その他";
 }
 
 function renderGuardHostAdminPanel() {
@@ -9206,6 +9491,24 @@ function handleClick(event) {
     state.activeUserPanelTab = USER_PANEL_TABS.some((tab) => tab.id === userPanelTabEl.dataset.userPanelTab)
       ? userPanelTabEl.dataset.userPanelTab
       : "playlist";
+    render();
+    return;
+  }
+
+  const hostAdminTabEl = target.closest("[data-host-admin-tab]");
+  if (hostAdminTabEl) {
+    state.activeHostAdminTab = HOST_ADMIN_TABS.some((tab) => tab.id === hostAdminTabEl.dataset.hostAdminTab)
+      ? hostAdminTabEl.dataset.hostAdminTab
+      : "bot";
+    render();
+    return;
+  }
+
+  const hostDatabaseCategoryEl = target.closest("[data-host-database-category]");
+  if (hostDatabaseCategoryEl) {
+    state.activeHostDatabaseCategory = HOST_DATABASE_CATEGORIES.some((category) => category.id === hostDatabaseCategoryEl.dataset.hostDatabaseCategory)
+      ? hostDatabaseCategoryEl.dataset.hostDatabaseCategory
+      : "all";
     render();
     return;
   }
