@@ -2659,6 +2659,7 @@ body.body--guard.body--status-only .app-shell--guard {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+  margin-bottom: 12px;
 }
 
 .host-admin-tab {
