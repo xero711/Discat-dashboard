@@ -2,6 +2,16 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (() => {
+        const localHosts = new Set(["127.0.0.1", "localhost", "::1"]);
+        if (window.location.protocol === "http:" && !localHosts.has(window.location.hostname)) {
+          window.location.replace(
+            `https://${window.location.host}${window.location.pathname}${window.location.search}${window.location.hash}`,
+          );
+        }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
     <meta name="description" content="Discat OneとDiscat Guardを管理するダッシュボード" />
