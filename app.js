@@ -780,15 +780,21 @@ document.addEventListener("pointerdown", handleDocumentPointerDown, true);
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
+  const fragmentParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const authError = params.get("auth_error");
-  const sessionToken = params.get("session_token");
+  const sessionToken = fragmentParams.get("session_token") ?? params.get("session_token");
   const product = normalizeProductId(params.get("product"));
   const dashboardVersion = params.get("dashboardVersion");
 
   if (sessionToken) {
-    setAuthToken(sessionToken);
-    state.authChecking = true;
+    const authTokenStored = setAuthToken(sessionToken);
+    state.authChecking = authTokenStored;
+    if (!authTokenStored) {
+      state.message =
+        "認証情報をブラウザに保存できませんでした。Cookieまたはサイトデータの保存を許可して、もう一度ログインしてください。";
+    }
     params.delete("session_token");
+    fragmentParams.delete("session_token");
   }
   if (authError) {
     state.authChecking = false;
@@ -813,7 +819,12 @@ async function boot() {
   }
   if (authError || sessionToken || product || dashboardVersion) {
     const query = params.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    const fragment = fragmentParams.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}${fragment ? `#${fragment}` : ""}`,
+    );
   }
   if (!authError) {
     state.authChecking = Boolean(getAuthToken());
@@ -1140,15 +1151,22 @@ function getAuthToken() {
     return storedToken;
   }
   const cookieToken = readCookie(AUTH_TOKEN_COOKIE_NAME);
-  if (cookieToken) {
-    writeLocalStorageToken(cookieToken);
+  if (cookieToken && writeLocalStorageToken(cookieToken)) {
+    deleteCookie(AUTH_TOKEN_COOKIE_NAME);
   }
   return cookieToken;
 }
 
 function setAuthToken(token) {
-  writeLocalStorageToken(token);
-  writeCookie(AUTH_TOKEN_COOKIE_NAME, token, AUTH_COOKIE_MAX_AGE_SECONDS);
+  const normalizedToken = String(token ?? "").trim();
+  if (!normalizedToken) {
+    return false;
+  }
+  if (writeLocalStorageToken(normalizedToken)) {
+    deleteCookie(AUTH_TOKEN_COOKIE_NAME);
+    return true;
+  }
+  return writeCookie(AUTH_TOKEN_COOKIE_NAME, normalizedToken, AUTH_COOKIE_MAX_AGE_SECONDS);
 }
 
 function clearAuthToken() {
@@ -1167,8 +1185,9 @@ function readLocalStorageToken() {
 function writeLocalStorageToken(token) {
   try {
     window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) === token;
   } catch {
-    // Cookie remains the fallback when localStorage is unavailable.
+    return false;
   }
 }
 
@@ -1217,14 +1236,23 @@ function readCookie(name) {
 
 function writeCookie(name, value, maxAgeSeconds) {
   const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${encodeURIComponent(name)}=${value}; Max-Age=${maxAgeSeconds}; Path=${cookiePath()}; SameSite=Lax${secure}`;
+  try {
+    document.cookie = `${encodeURIComponent(name)}=${value}; Max-Age=${maxAgeSeconds}; Path=${cookiePath()}; SameSite=Lax${secure}`;
+    return readCookie(name) === value;
+  } catch {
+    return false;
+  }
 }
 
 function deleteCookie(name) {
   const encodedName = encodeURIComponent(name);
   const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  for (const path of new Set([cookiePath(), "/"])) {
-    document.cookie = `${encodedName}=; Max-Age=0; Path=${path}; SameSite=Lax${secure}`;
+  try {
+    for (const path of new Set([cookiePath(), "/"])) {
+      document.cookie = `${encodedName}=; Max-Age=0; Path=${path}; SameSite=Lax${secure}`;
+    }
+  } catch {
+    // Ignore cleanup failures in restricted browser contexts.
   }
 }
 
