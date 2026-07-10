@@ -103,20 +103,6 @@ body.body--guard::before {
     linear-gradient(155deg, transparent 0 48%, rgba(93, 112, 165, 0.1) 48% 49%, transparent 49% 100%);
 }
 
-body.body--guard.body--status-only {
-  color-scheme: light;
-  background:
-    linear-gradient(135deg, rgba(92, 219, 247, 0.42), transparent 35%),
-    linear-gradient(225deg, rgba(187, 247, 255, 0.72), transparent 38%),
-    linear-gradient(180deg, #f3fdff 0%, #ddf8ff 52%, #c8edf8 100%);
-}
-
-body.body--guard.body--status-only::before {
-  background:
-    linear-gradient(115deg, transparent 0 18%, rgba(67, 200, 230, 0.26) 18% 19%, transparent 19% 100%),
-    linear-gradient(155deg, transparent 0 48%, rgba(9, 143, 181, 0.14) 48% 49%, transparent 49% 100%);
-}
-
 button,
 input,
 select {
@@ -165,27 +151,6 @@ button:disabled {
   --success: #7ef0bd;
   --line: rgba(110, 223, 242, 0.12);
   --shadow: 0 18px 48px rgba(0, 7, 12, 0.34);
-}
-
-body.body--guard.body--status-only .app-shell--guard {
-  color-scheme: light;
-  --bg: #eefcff;
-  --panel: rgba(248, 253, 255, 0.94);
-  --panel-strong: rgba(255, 255, 255, 0.98);
-  --panel-soft: rgba(28, 173, 210, 0.08);
-  --border: rgba(11, 127, 161, 0.22);
-  --text: #143f4e;
-  --text-strong: #052b38;
-  --muted: #326979;
-  --muted-2: #5d8794;
-  --pink: #65daf1;
-  --purple: #1198bd;
-  --cyan: #14b6da;
-  --amber: #9a6500;
-  --danger: #c43d5a;
-  --success: #0d7f60;
-  --line: rgba(11, 127, 161, 0.12);
-  --shadow: 0 18px 48px rgba(9, 90, 116, 0.14);
 }
 
 .app-shell::after {
