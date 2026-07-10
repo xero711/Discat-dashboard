@@ -24,6 +24,7 @@ const HOST_REFRESH_INTERVAL_MS = 5000;
 const PLAYLIST_PREVIEW_DURATION_SECONDS = 15;
 const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 const TURNSTILE_PROOF_STORAGE_KEY = "discat_one_turnstile_proof";
+const TURNSTILE_PROOF_SCOPE_STORAGE_KEY = "discat_one_turnstile_proof_scope";
 const MASCOT_URL = "./assets/discat-mascot.png";
 const GUARD_MASCOT_URL = "./assets/discatGuard-mascot.png";
 const ONE_SITE_ICON_URL = "./assets/apple-touch-icon.png";
@@ -271,11 +272,25 @@ const GUARD_FEATURES = [
     icon: "lock",
   },
   {
+    id: "invitation",
+    label: "招待リンク",
+    description: "新しく作成された招待リンクをすぐに無効化し、作成者へのDM警告を設定します。",
+    help: "招待リンクの自動無効化と、リンク作成者へのDM警告をサーバーごとに設定します。",
+    icon: "link",
+  },
+  {
     id: "moderation",
     label: "荒らし対策",
     description: "連投リンク、招待リンク、連続投稿、絵文字スパム、連続メンション、暴言、下ネタ、NGワードの検知と処罰を設定します。",
     help: "連投系は検知ペースと処置、暴言/下ネタは処罰と検知しないチャンネル、NGワードは追加語句と処罰を設定します。",
     icon: "shield",
+  },
+  {
+    id: "risk",
+    label: "危険度判断",
+    description: "参加メンバーのアカウント年齢・招待元・観測済みの問題行為から危険度を判定します。",
+    help: "Guardが観測した情報だけを使い、参加者ごとに0〜100%の危険度を算出します。高危険度の管理者DMと段階的な処置を設定できます。",
+    icon: "alert",
   },
   {
     id: "logging",
@@ -296,6 +311,7 @@ const GUARD_FEATURES = [
 
 const GUARD_FEATURE_ROWS = [
   ["連投監視", "リンク、招待リンク、連続投稿、絵文字、メンションのペースに応じて処置します。"],
+  ["危険度判断", "参加時のアカウント年齢・招待元・観測済みの問題行為から危険度を判定します。"],
   ["NGワード検知", "管理者が追加した語句を含む投稿を検知して処置します。"],
   ["内容保護", "ログに保存する内容は本文を除外し、必要なメタデータだけを扱います。"],
   ["低権限運用", "スラッシュコマンドや通常コマンドを使わない監視専用BOTとして動作します。"],
@@ -369,6 +385,13 @@ const GUARD_MODERATION_NG_WORD_FEATURE_IDS = new Set(["ng_words"]);
 const GUARD_MODERATION_ACTIONS = [
   { id: "log", label: "ログのみ" },
   { id: "delete", label: "メッセージ削除" },
+  { id: "kick", label: "キック" },
+  { id: "ban", label: "BAN" },
+];
+
+const GUARD_RISK_ACTIONS = [
+  { id: "none", label: "何もしない" },
+  { id: "log", label: "ログのみ" },
   { id: "kick", label: "キック" },
   { id: "ban", label: "BAN" },
 ];
@@ -598,6 +621,7 @@ const state = {
   hostError: null,
   hostMessage: null,
   hostLoading: false,
+  hostInFlight: false,
   hostActionRunning: null,
   hostInviteRunning: null,
   hostInviteLinks: {},
@@ -617,6 +641,7 @@ const state = {
     checkedAt: null,
     error: null,
   },
+  serviceStatusInFlight: false,
   playlist: null,
   playlistLoading: false,
   playlistSaving: false,
@@ -644,6 +669,7 @@ const state = {
     proofToken: readTurnstileProofToken(),
     verified: Boolean(readTurnstileProofToken()),
     verifying: false,
+    requestId: 0,
     error: null,
     message: null,
     widgetId: null,
@@ -659,8 +685,10 @@ const state = {
     tts: false,
     features: false,
     guardVerification: false,
+    guardInvitation: false,
     guardModeration: false,
     guardLogging: false,
+    guardRisk: false,
   },
   pendingPageId: null,
   pendingProductId: null,
@@ -671,32 +699,43 @@ const state = {
     health: null,
     events: GUARD_SAMPLE_EVENTS,
     loading: true,
+    inFlight: false,
     loadedAt: null,
     activeFeature: "verification",
     source: "sample",
     status: normalizeGuardStatus(null),
     verificationSettings: [],
+    invitationSettings: [],
     moderationSettings: [],
     loggingSettings: [],
+    riskSettings: [],
     verificationOptions: null,
     verificationOptionsError: null,
     verificationRecords: [],
     verificationSaving: false,
+    invitationSaving: false,
     moderationSaving: false,
     loggingSaving: false,
+    riskSaving: false,
     verificationMessage: null,
+    invitationMessage: null,
     verificationError: null,
+    invitationError: null,
     moderationMessage: null,
     moderationError: null,
     loggingMessage: null,
     loggingError: null,
+    riskMessage: null,
+    riskError: null,
     adminMessage: null,
     adminError: null,
     adminInviteRunning: null,
     adminInviteLinks: {},
     savedVerificationForm: null,
+    savedInvitationForm: null,
     savedModerationForm: null,
     savedLoggingForm: null,
+    savedRiskForm: null,
     pendingFeatureId: null,
     pendingGuildId: null,
     verificationForm: {
@@ -709,6 +748,11 @@ const state = {
       duplicate_action: "notify",
       restricted_guild_check_enabled: true,
     },
+    invitationForm: {
+      guild_id: "",
+      enabled: false,
+      dm_warning_enabled: true,
+    },
     moderationForm: {
       guild_id: "",
       features: {},
@@ -716,6 +760,16 @@ const state = {
     loggingForm: {
       guild_id: "",
       events: {},
+    },
+    riskForm: {
+      guild_id: "",
+      enabled: false,
+      low_action: "none",
+      medium_action: "log",
+      high_action: "log",
+      critical_action: "log",
+      notify_admins_enabled: true,
+      notify_threshold: 80,
     },
   },
   requestIds: {
@@ -729,6 +783,7 @@ const state = {
     activity: 0,
     rankings: 0,
     guard: 0,
+    guardSession: 0,
     guildOptions: 0,
     ticketPanel: 0,
   },
@@ -766,7 +821,9 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   if (state.activeProduct === "guard") {
-    void loadGuardData({ silent: true });
+    if (state.user && getAuthToken()) {
+      void loadGuardData({ silent: true });
+    }
     return;
   }
   void loadServiceStatus({ silent: true });
@@ -775,6 +832,7 @@ document.addEventListener("visibilitychange", () => {
     void loadHostData({ silent: true, keepMessage: true });
   }
 });
+window.addEventListener("storage", handleAuthTokenStorageChange);
 document.addEventListener("keydown", handleKeydown);
 document.addEventListener("pointerdown", handleDocumentPointerDown, true);
 
@@ -810,9 +868,6 @@ async function boot() {
     state.activeProduct = product;
     writeProductPreference(product);
     params.delete("product");
-  } else if (authError || sessionToken) {
-    state.activeProduct = "one";
-    writeProductPreference("one");
   }
   if (dashboardVersion) {
     params.delete("dashboardVersion");
@@ -833,13 +888,17 @@ async function boot() {
   render();
   updateDocumentForProduct();
   if (state.activeProduct === "guard") {
-    await Promise.all([
-      loadTurnstileConfig(),
-      loadGuardAccountContext({ silent: true, renderAfter: false }),
-      loadGuardData({ silent: true, renderAfter: false }),
-    ]);
-    hydrateGuardVerificationForm();
-    hydrateGuardModerationForm();
+    await loadTurnstileConfig({ silent: true, renderAfter: false });
+    if (getAuthToken()) {
+      await loadGuardAccountContext({ silent: true, renderAfter: false });
+      if (state.user) {
+        await loadGuardData({ silent: true, renderAfter: false });
+        hydrateGuardVerificationForm();
+        hydrateGuardModerationForm();
+      }
+    } else {
+      resetGuardAuthenticatedState();
+    }
     render();
     return;
   }
@@ -872,7 +931,7 @@ function readInitialProduct() {
 function configuredOneApiBase() {
   const params = new URLSearchParams(window.location.search);
   const paramApiBase = cleanGuardApiBase(params.get("oneApiBase"));
-  if (paramApiBase) {
+  if (paramApiBase && isAllowedOneApiBase(paramApiBase)) {
     return paramApiBase;
   }
 
@@ -884,7 +943,7 @@ function configuredOneApiBase() {
   }
 
   const cleanStoredApiBase = cleanGuardApiBase(storedApiBase);
-  if (cleanStoredApiBase && !isWrongPublicOneApiBase(cleanStoredApiBase)) {
+  if (cleanStoredApiBase && isAllowedOneApiBase(cleanStoredApiBase)) {
     return cleanStoredApiBase;
   }
   if (cleanStoredApiBase) {
@@ -906,18 +965,7 @@ function defaultOneApiBase() {
 }
 
 function isWrongPublicOneApiBase(value) {
-  if (isLocalDashboardOrigin()) {
-    return false;
-  }
-  try {
-    const url = new URL(value);
-    if (window.location.protocol === "https:" && url.protocol !== "https:") {
-      return true;
-    }
-    return url.hostname !== new URL(PUBLIC_API_BASE_URL).hostname;
-  } catch {
-    return true;
-  }
+  return !isAllowedOneApiBase(value);
 }
 
 function configuredGuardApiBase() {
@@ -932,13 +980,10 @@ function configuredGuardApiBase() {
     cleanGuardApiBase(params.get("guardApiBase")) ??
     cleanGuardApiBase(params.get("apiBase")) ??
     cleanGuardApiBase(storedApiBase);
-  if (configuredApiBase && validateGuardApiBase(configuredApiBase)) {
-    return defaultGuardApiBase();
+  if (configuredApiBase && isAllowedGuardApiBase(configuredApiBase)) {
+    return configuredApiBase;
   }
-  if (configuredApiBase && isWrongPublicGuardApiBase(configuredApiBase)) {
-    return defaultGuardApiBase();
-  }
-  return configuredApiBase ?? defaultGuardApiBase();
+  return defaultGuardApiBase();
 }
 
 function defaultGuardApiBase() {
@@ -946,14 +991,38 @@ function defaultGuardApiBase() {
 }
 
 function isWrongPublicGuardApiBase(value) {
-  if (isLocalDashboardOrigin()) {
+  return !isAllowedGuardApiBase(value);
+}
+
+function isAllowedOneApiBase(value) {
+  return isAllowedApiBase(value, PUBLIC_API_BASE_URL);
+}
+
+function isAllowedGuardApiBase(value) {
+  return isAllowedApiBase(value, GUARD_PUBLIC_API_BASE_URL);
+}
+
+function isAllowedApiBase(value, publicBase) {
+  const cleaned = cleanGuardApiBase(value);
+  if (!cleaned) {
     return false;
   }
   try {
-    return new URL(value).hostname === "api.xero-x.me";
+    const url = new URL(cleaned);
+    if (url.username || url.password) {
+      return false;
+    }
+    if (isLocalDashboardOrigin()) {
+      return isLoopbackHostname(url.hostname);
+    }
+    return cleaned === cleanGuardApiBase(publicBase);
   } catch {
     return false;
   }
+}
+
+function isLoopbackHostname(hostname) {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(String(hostname ?? "").toLowerCase());
 }
 
 function cleanGuardApiBase(value) {
@@ -991,6 +1060,11 @@ function validateGuardApiBase(value) {
   }
   if (window.location.protocol === "https:" && url.protocol !== "https:" && !isLocalDashboardOrigin()) {
     return "GitHub PagesなどHTTPSのダッシュボードでは、https:// から始まるGuard API URLを指定してください。";
+  }
+  if (!isAllowedGuardApiBase(url.toString())) {
+    return isLocalDashboardOrigin()
+      ? "ローカルダッシュボードではlocalhostまたはループバックのGuard APIだけを指定できます。"
+      : "公開ダッシュボードでは公式のGuard API URLだけを使用できます。";
   }
   return "";
 }
@@ -1031,6 +1105,15 @@ async function activateProductPage(productId, options = {}) {
     state.activePage = nextPageId;
   }
   writeProductPreference(nextProduct);
+  if (!state.user) {
+    state.security.requestId += 1;
+    clearTurnstileProofToken();
+    state.security.proofToken = "";
+    state.security.verified = false;
+    state.security.verifying = false;
+    state.security.message = null;
+    state.security.widgetId = null;
+  }
   stopOneAutoRefresh();
   stopGuardAutoRefresh();
   if (nextProduct === "guard") {
@@ -1040,12 +1123,16 @@ async function activateProductPage(productId, options = {}) {
   renderProductTransition(previousProduct, nextProduct);
 
   if (nextProduct === "guard") {
-    await Promise.all([
-      loadTurnstileConfig({ silent: true, renderAfter: false }),
-      loadGuardAccountContext({ silent: true, renderAfter: false }),
-      loadGuardData({ silent: true, renderAfter: false }),
-    ]);
-    hydrateGuardVerificationForm();
+    await loadTurnstileConfig({ silent: true, renderAfter: false });
+    if (getAuthToken()) {
+      await loadGuardAccountContext({ silent: true, renderAfter: false });
+      if (state.user) {
+        await loadGuardData({ silent: true, renderAfter: false });
+        hydrateGuardVerificationForm();
+      }
+    } else {
+      resetGuardAuthenticatedState();
+    }
     render();
     return;
   }
@@ -1174,6 +1261,14 @@ function clearAuthToken() {
   deleteCookie(AUTH_TOKEN_COOKIE_NAME);
 }
 
+function handleAuthTokenStorageChange(event) {
+  if (event.key !== AUTH_TOKEN_STORAGE_KEY && event.key !== null) {
+    return;
+  }
+  clearTurnstileProofToken();
+  resetSessionState();
+}
+
 function readLocalStorageToken() {
   try {
     return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
@@ -1201,15 +1296,24 @@ function removeLocalStorageToken() {
 
 function readTurnstileProofToken() {
   try {
-    return window.sessionStorage.getItem(TURNSTILE_PROOF_STORAGE_KEY) ?? "";
+    const token = window.sessionStorage.getItem(TURNSTILE_PROOF_STORAGE_KEY) ?? "";
+    const scope = window.sessionStorage.getItem(TURNSTILE_PROOF_SCOPE_STORAGE_KEY) ?? "";
+    const expectedScope = dashboardRedirectUrlForProduct(readInitialProduct()).href;
+    if (!token || scope !== expectedScope) {
+      window.sessionStorage.removeItem(TURNSTILE_PROOF_STORAGE_KEY);
+      window.sessionStorage.removeItem(TURNSTILE_PROOF_SCOPE_STORAGE_KEY);
+      return "";
+    }
+    return token;
   } catch {
     return "";
   }
 }
 
-function writeTurnstileProofToken(token) {
+function writeTurnstileProofToken(token, scope = dashboardRedirectUrl().href) {
   try {
     window.sessionStorage.setItem(TURNSTILE_PROOF_STORAGE_KEY, token);
+    window.sessionStorage.setItem(TURNSTILE_PROOF_SCOPE_STORAGE_KEY, scope);
   } catch {
     // The proof token only improves continuity across reloads.
   }
@@ -1218,6 +1322,7 @@ function writeTurnstileProofToken(token) {
 function clearTurnstileProofToken() {
   try {
     window.sessionStorage.removeItem(TURNSTILE_PROOF_STORAGE_KEY);
+    window.sessionStorage.removeItem(TURNSTILE_PROOF_SCOPE_STORAGE_KEY);
   } catch {
     // Ignore storage failures.
   }
@@ -1271,9 +1376,15 @@ async function request(path, init = {}, options = {}) {
     headers.set("Content-Type", "application/json");
   }
   const token = getAuthToken();
-  if (token && !headers.has("Authorization")) {
+  const trustedApiBase = isAllowedOneApiBase(API_BASE_URL);
+  if (!trustedApiBase) {
+    headers.delete("Authorization");
+  } else if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  const sentCurrentAuthToken = Boolean(
+    trustedApiBase && token && headers.get("Authorization") === `Bearer ${token}`,
+  );
 
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -1307,8 +1418,9 @@ async function request(path, init = {}, options = {}) {
   const requestId = response.headers.get("x-request-id") ?? undefined;
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && sentCurrentAuthToken && token === getAuthToken()) {
       clearAuthToken();
+      resetSessionState();
     }
     throw new ApiError(response.status, apiErrorMessage(response.status, payload), requestId);
   }
@@ -1354,12 +1466,12 @@ const api = {
     return `${API_BASE_URL}/auth/discord/login?${params.toString()}`;
   },
   turnstileConfig: () => request("/auth/turnstile/config"),
-  verifyTurnstile: (token) =>
+  verifyTurnstile: (token, dashboardRedirectUrlValue = dashboardRedirectUrl().href) =>
     request("/auth/turnstile/verify", {
       method: "POST",
       body: JSON.stringify({
         token,
-        dashboard_redirect_url: dashboardRedirectUrl().href,
+        dashboard_redirect_url: dashboardRedirectUrlValue,
       }),
     }),
   publicStatus: () => request("/host/public-status", {}, { timeoutMs: SERVICE_STATUS_TIMEOUT_MS }),
@@ -1438,9 +1550,13 @@ const api = {
 boot();
 
 function dashboardRedirectUrl() {
+  return dashboardRedirectUrlForProduct(state.activeProduct);
+}
+
+function dashboardRedirectUrlForProduct(productId) {
   if (!["http:", "https:"].includes(window.location.protocol)) {
     const publicUrl = new URL(PUBLIC_DASHBOARD_URL);
-    if (state.activeProduct === "guard") {
+    if (normalizeProductId(productId) === "guard") {
       publicUrl.searchParams.set("product", "guard");
     }
     return publicUrl;
@@ -1448,7 +1564,10 @@ function dashboardRedirectUrl() {
   const redirectUrl = new URL(window.location.href);
   redirectUrl.search = "";
   redirectUrl.hash = "";
-  if (state.activeProduct === "guard") {
+  if (redirectUrl.pathname.endsWith("/index.html")) {
+    redirectUrl.pathname = redirectUrl.pathname.slice(0, -"index.html".length);
+  }
+  if (normalizeProductId(productId) === "guard") {
     redirectUrl.searchParams.set("product", "guard");
   }
   return redirectUrl;
@@ -1677,6 +1796,10 @@ function shouldDeferGuildOptionsRender() {
 }
 
 async function loadServiceStatus(options = {}) {
+  if (state.serviceStatusInFlight) {
+    return;
+  }
+  state.serviceStatusInFlight = true;
   const requestId = state.requestIds.serviceStatus + 1;
   state.requestIds.serviceStatus = requestId;
   const wasBlocked = serviceBlockedActive() || state.serviceStatus.loading;
@@ -1708,6 +1831,7 @@ async function loadServiceStatus(options = {}) {
     });
     state.serviceStatus.error = error instanceof Error ? error.message : "APIの起動状態を確認できませんでした。";
   } finally {
+    state.serviceStatusInFlight = false;
     if (requestId === state.requestIds.serviceStatus) {
       render();
       if (wasBlocked && !serviceBlockedActive() && options.hydrate !== false) {
@@ -1737,6 +1861,10 @@ async function ensureInteractiveWhenServiceOnline() {
 }
 
 async function loadHostData(options = {}) {
+  if (state.hostInFlight) {
+    return;
+  }
+  state.hostInFlight = true;
   const requestId = state.requestIds.host + 1;
   state.requestIds.host = requestId;
   state.hostLoading = !options.silent;
@@ -1744,7 +1872,9 @@ async function loadHostData(options = {}) {
   if (!options.keepMessage) {
     state.hostMessage = null;
   }
-  render();
+  if (!options.silent) {
+    render();
+  }
 
   try {
     const [status, logs] = await Promise.all([api.hostStatus(), api.hostLogs(12)]);
@@ -1760,6 +1890,7 @@ async function loadHostData(options = {}) {
     }
     state.hostError = error instanceof Error ? error.message : "管理者用情報を取得できませんでした。";
   } finally {
+    state.hostInFlight = false;
     if (requestId === state.requestIds.host) {
       state.hostLoading = false;
       render();
@@ -2351,7 +2482,12 @@ function syncGuildOptionsAutoRefresh() {
 }
 
 function shouldAutoRefreshGuardStatus() {
-  return state.activeProduct === "guard" && !document.hidden;
+  return Boolean(
+    state.activeProduct === "guard" &&
+      state.user &&
+      getAuthToken() &&
+      !document.hidden,
+  );
 }
 
 function syncGuardStatusRefresh() {
@@ -2444,7 +2580,8 @@ async function createGuardGuildInvite(guildId) {
   if (!resolvedGuildId) {
     return;
   }
-  if (!getAuthToken()) {
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
     state.guard.adminError = "管理者ログインが必要です。";
     render();
     return;
@@ -2457,16 +2594,47 @@ async function createGuardGuildInvite(guildId) {
 
   try {
     const invite = normalizeAdminGuildInvite(await guardCreateAdminGuildInvite(resolvedGuildId));
+    if (!guardSessionIsCurrent(guardSession)) {
+      closePendingInviteWindow(pendingInviteWindow);
+      return;
+    }
     state.guard.adminInviteLinks = { ...state.guard.adminInviteLinks, [resolvedGuildId]: invite };
     state.guard.adminMessage = `${invite.guild_name || "サーバー"} の招待リンクを作成しました。`;
     openInviteUrl(invite.invite_url, pendingInviteWindow);
   } catch (error) {
     closePendingInviteWindow(pendingInviteWindow);
-    state.guard.adminError = error instanceof Error ? error.message : "招待リンクを作成できませんでした。";
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.adminError = error instanceof Error ? error.message : "招待リンクを作成できませんでした。";
+    }
   } finally {
-    state.guard.adminInviteRunning = null;
-    render();
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.adminInviteRunning = null;
+      render();
+    }
   }
+}
+
+function captureGuardSessionIdentity() {
+  const token = getAuthToken();
+  const userId = String(state.user?.discord_user_id ?? state.user?.id ?? "");
+  if (!token || !userId) {
+    return null;
+  }
+  return {
+    token,
+    userId,
+    generation: state.requestIds.guardSession,
+  };
+}
+
+function guardSessionIsCurrent(session) {
+  const userId = String(state.user?.discord_user_id ?? state.user?.id ?? "");
+  return Boolean(
+    session &&
+      session.generation === state.requestIds.guardSession &&
+      session.token === getAuthToken() &&
+      session.userId === userId,
+  );
 }
 
 function normalizeAdminGuildInvite(invite) {
@@ -2798,6 +2966,7 @@ function resetDirtyViews() {
     guardVerification: false,
     guardModeration: false,
     guardLogging: false,
+    guardRisk: false,
   };
   clearPendingNavigation();
 }
@@ -2969,6 +3138,16 @@ function guardVerificationFormFromSettings(guildId) {
   });
 }
 
+function guardInvitationFormFromSettings(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  const settings = state.guard.invitationSettings.find((item) => item.guild_id === resolvedGuildId);
+  return normalizeGuardInvitationForm({
+    guild_id: resolvedGuildId,
+    enabled: settings?.enabled ?? false,
+    dm_warning_enabled: settings?.dm_warning_enabled ?? true,
+  });
+}
+
 function guardModerationFormFromSettings(guildId) {
   const resolvedGuildId = String(guildId ?? "");
   const settings = state.guard.moderationSettings.find((item) => item.guild_id === resolvedGuildId);
@@ -3008,6 +3187,20 @@ function rememberSavedGuardLoggingForm(form) {
   state.dirtyViews.guardLogging = false;
 }
 
+function rememberSavedGuardInvitationForm(form) {
+  const normalized = normalizeGuardInvitationForm(form);
+  state.guard.invitationForm = cloneState(normalized);
+  state.guard.savedInvitationForm = cloneState(normalized);
+  state.dirtyViews.guardInvitation = false;
+}
+
+function rememberSavedGuardRiskForm(form) {
+  const normalized = normalizeGuardRiskForm(form);
+  state.guard.riskForm = cloneState(normalized);
+  state.guard.savedRiskForm = cloneState(normalized);
+  state.dirtyViews.guardRisk = false;
+}
+
 function comparableGuardVerificationForm(form) {
   if (!form) {
     return null;
@@ -3029,11 +3222,29 @@ function comparableGuardLoggingForm(form) {
   return normalizeGuardLoggingForm(form);
 }
 
+function comparableGuardInvitationForm(form) {
+  if (!form) {
+    return null;
+  }
+  return normalizeGuardInvitationForm(form);
+}
+
+function comparableGuardRiskForm(form) {
+  if (!form) {
+    return null;
+  }
+  return normalizeGuardRiskForm(form);
+}
+
 function updateDirtyState(view) {
   if (view === "guardVerification") {
     state.dirtyViews.guardVerification =
       JSON.stringify(comparableGuardVerificationForm(state.guard.verificationForm)) !==
       JSON.stringify(comparableGuardVerificationForm(state.guard.savedVerificationForm));
+  } else if (view === "guardInvitation") {
+    state.dirtyViews.guardInvitation =
+      JSON.stringify(comparableGuardInvitationForm(state.guard.invitationForm)) !==
+      JSON.stringify(comparableGuardInvitationForm(state.guard.savedInvitationForm));
   } else if (view === "guardModeration") {
     state.dirtyViews.guardModeration =
       JSON.stringify(comparableGuardModerationForm(state.guard.moderationForm)) !==
@@ -3042,6 +3253,10 @@ function updateDirtyState(view) {
     state.dirtyViews.guardLogging =
       JSON.stringify(comparableGuardLoggingForm(state.guard.loggingForm)) !==
       JSON.stringify(comparableGuardLoggingForm(state.guard.savedLoggingForm));
+  } else if (view === "guardRisk") {
+    state.dirtyViews.guardRisk =
+      JSON.stringify(comparableGuardRiskForm(state.guard.riskForm)) !==
+      JSON.stringify(comparableGuardRiskForm(state.guard.savedRiskForm));
   } else if (view === "features") {
     state.dirtyViews.features =
       JSON.stringify(comparableFeatureSettings(state.featureSettings)) !==
@@ -3074,8 +3289,14 @@ function activeGuardDirtyView() {
   if (featureId === "moderation") {
     return "guardModeration";
   }
+  if (featureId === "invitation") {
+    return "guardInvitation";
+  }
   if (featureId === "logging") {
     return "guardLogging";
+  }
+  if (featureId === "risk") {
+    return "guardRisk";
   }
   return "guardVerification";
 }
@@ -3392,16 +3613,11 @@ function buildBumpRankPatch(settings) {
 }
 
 async function logout() {
-  state.requestIds.account += 1;
-  state.requestIds.guildData += 1;
-  state.requestIds.save += 1;
-  state.requestIds.playlist += 1;
-  state.requestIds.rankings += 1;
-  state.requestIds.ticketPanel += 1;
-  await api.logout().catch(() => undefined);
+  const logoutRequest = api.logout().catch(() => undefined);
   clearAuthToken();
   clearTurnstileProofToken();
   resetSessionState();
+  await logoutRequest;
 }
 
 async function loadTurnstileConfig(options = {}) {
@@ -3442,12 +3658,18 @@ async function handleTurnstileToken(token) {
     render();
     return;
   }
+  const verificationScope = dashboardRedirectUrl().href;
+  const requestId = state.security.requestId + 1;
+  state.security.requestId = requestId;
   state.security.verifying = true;
   state.security.error = null;
   state.security.message = "検証中です。";
   render();
   try {
-    const result = await api.verifyTurnstile(token);
+    const result = await api.verifyTurnstile(token, verificationScope);
+    if (requestId !== state.security.requestId || verificationScope !== dashboardRedirectUrl().href) {
+      return;
+    }
     if (!result?.verified) {
       throw new Error("セキュリティ検証に失敗しました。もう一度お試しください。");
     }
@@ -3457,9 +3679,12 @@ async function handleTurnstileToken(token) {
     state.security.message = "検証が完了しました。Discordでログインできます。";
     state.security.error = null;
     if (proofToken) {
-      writeTurnstileProofToken(proofToken);
+      writeTurnstileProofToken(proofToken, verificationScope);
     }
   } catch (error) {
+    if (requestId !== state.security.requestId || verificationScope !== dashboardRedirectUrl().href) {
+      return;
+    }
     clearTurnstileProofToken();
     state.security.proofToken = "";
     state.security.verified = false;
@@ -3467,8 +3692,10 @@ async function handleTurnstileToken(token) {
       error instanceof Error ? error.message : "セキュリティ検証に失敗しました。もう一度お試しください。";
     state.security.message = null;
   } finally {
-    state.security.verifying = false;
-    render();
+    if (requestId === state.security.requestId && verificationScope === dashboardRedirectUrl().href) {
+      state.security.verifying = false;
+      render();
+    }
   }
 }
 
@@ -3548,7 +3775,100 @@ function syncTurnstileWidget() {
     });
 }
 
+function resetGuardAuthenticatedState() {
+  state.requestIds.guard += 1;
+  state.requestIds.guardSession += 1;
+  stopGuardAutoRefresh();
+  state.guard.apiError = null;
+  state.guard.health = null;
+  state.guard.events = [];
+  state.guard.loading = false;
+  state.guard.inFlight = false;
+  state.guard.loadedAt = null;
+  state.guard.source = "auth-required";
+  state.guard.status = normalizeGuardStatus(null);
+  state.guard.verificationSettings = [];
+  state.guard.moderationSettings = [];
+  state.guard.loggingSettings = [];
+  state.guard.invitationSettings = [];
+  state.guard.riskSettings = [];
+  state.guard.verificationOptions = null;
+  state.guard.verificationOptionsError = null;
+  state.guard.verificationRecords = [];
+  state.guard.verificationSaving = false;
+  state.guard.invitationSaving = false;
+  state.guard.moderationSaving = false;
+  state.guard.loggingSaving = false;
+  state.guard.riskSaving = false;
+  state.guard.verificationMessage = null;
+  state.guard.invitationMessage = null;
+  state.guard.verificationError = null;
+  state.guard.invitationError = null;
+  state.guard.moderationMessage = null;
+  state.guard.moderationError = null;
+  state.guard.loggingMessage = null;
+  state.guard.loggingError = null;
+  state.guard.riskMessage = null;
+  state.guard.riskError = null;
+  state.guard.adminMessage = null;
+  state.guard.adminError = null;
+  state.guard.adminInviteRunning = null;
+  state.guard.adminInviteLinks = {};
+  state.guard.savedVerificationForm = null;
+  state.guard.savedInvitationForm = null;
+  state.guard.savedModerationForm = null;
+  state.guard.savedLoggingForm = null;
+  state.guard.savedRiskForm = null;
+  state.guard.pendingFeatureId = null;
+  state.guard.pendingGuildId = null;
+  state.guard.verificationForm = {
+    guild_id: "",
+    enabled: true,
+    button_channel_lock_enabled: true,
+    button_channel_id: "",
+    log_channel_id: "",
+    role_id: "",
+    duplicate_action: "notify",
+    restricted_guild_check_enabled: true,
+  };
+  state.guard.invitationForm = { guild_id: "", enabled: false, dm_warning_enabled: true };
+  state.guard.moderationForm = { guild_id: "", features: {} };
+  state.guard.loggingForm = { guild_id: "", events: {} };
+  state.guard.riskForm = {
+    guild_id: "",
+    enabled: false,
+    low_action: "none",
+    medium_action: "log",
+    high_action: "log",
+    critical_action: "log",
+    notify_admins_enabled: true,
+    notify_threshold: 80,
+  };
+  state.dirtyViews.guardVerification = false;
+  state.dirtyViews.guardInvitation = false;
+  state.dirtyViews.guardModeration = false;
+  state.dirtyViews.guardLogging = false;
+  state.dirtyViews.guardRisk = false;
+}
+
 function resetSessionState() {
+  state.requestIds.account += 1;
+  state.requestIds.guildData += 1;
+  state.requestIds.save += 1;
+  state.requestIds.host += 1;
+  state.requestIds.adminPlaylists += 1;
+  state.requestIds.playlist += 1;
+  state.requestIds.activity += 1;
+  state.requestIds.rankings += 1;
+  state.requestIds.guildOptions += 1;
+  state.requestIds.ticketPanel += 1;
+  state.security.requestId += 1;
+  state.security.verifying = false;
+  clearTurnstileProofToken();
+  state.security.proofToken = "";
+  state.security.verified = false;
+  state.security.message = null;
+  state.security.widgetId = null;
   state.authChecking = false;
   state.user = null;
   state.guilds = [];
@@ -3565,6 +3885,7 @@ function resetSessionState() {
   state.hostError = null;
   state.hostMessage = null;
   state.hostLoading = false;
+  state.hostInFlight = false;
   state.hostActionRunning = null;
   state.hostInviteRunning = null;
   state.hostInviteLinks = {};
@@ -3594,6 +3915,7 @@ function resetSessionState() {
   state.activeRankingPeriod = "daily";
   state.activeUserPanelTab = "playlist";
   state.support = createDefaultSupportState();
+  resetGuardAuthenticatedState();
   resetDirtyViews();
   render();
 }
@@ -3767,6 +4089,9 @@ function render(options = {}) {
     syncPlaylistPlayers();
   } else if (state.activeProduct === "guard") {
     syncGuardStatusRefresh();
+    if (!state.user) {
+      syncTurnstileWidget();
+    }
   }
 }
 
@@ -3864,6 +4189,21 @@ function enhanceSelectControls() {
     combo.innerHTML = renderComboBoxShell(select);
     select.insertAdjacentElement("afterend", combo);
     syncComboBoxFromSelect(combo);
+  });
+}
+
+function guardRiskFormFromSettings(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  const settings = state.guard.riskSettings.find((item) => item.guild_id === resolvedGuildId);
+  return normalizeGuardRiskForm({
+    guild_id: resolvedGuildId,
+    enabled: settings?.enabled ?? false,
+    low_action: settings?.low_action ?? "none",
+    medium_action: settings?.medium_action ?? "log",
+    high_action: settings?.high_action ?? "log",
+    critical_action: settings?.critical_action ?? "log",
+    notify_admins_enabled: settings?.notify_admins_enabled ?? true,
+    notify_threshold: settings?.notify_threshold ?? 80,
   });
 }
 
@@ -4149,6 +4489,12 @@ function selectComboBoxOption(optionButton) {
 
 function renderMainContent() {
   if (state.activeProduct === "guard") {
+    if (authCheckingActive()) {
+      return renderServiceStatusPanel("checking");
+    }
+    if (!state.user || !getAuthToken()) {
+      return renderLoginPanel();
+    }
     if (guardCheckingActive()) {
       return renderServiceStatusPanel("checking");
     }
@@ -4169,7 +4515,7 @@ function renderMainContent() {
   if (authCheckingActive()) {
     return renderServiceStatusPanel("checking");
   }
-  return state.user ? renderDashboard() : renderLoginPanel();
+  return state.user && getAuthToken() ? renderDashboard() : renderLoginPanel();
 }
 
 function serviceStatusOnlyActive() {
@@ -4180,6 +4526,7 @@ function renderTopbar() {
   const loginState = loginButtonState();
   const product = PRODUCT_META[state.activeProduct] ?? PRODUCT_META.one;
   const guardProduct = state.activeProduct === "guard";
+  const authenticated = Boolean(state.user && getAuthToken());
   return `
     <header class="topbar">
       <div class="brand">
@@ -4192,7 +4539,7 @@ function renderTopbar() {
       <nav class="topbar__actions" aria-label="Dashboard actions">
         ${renderProductSwitcher()}
         ${
-          state.user
+          authenticated
             ? `
               <button class="icon-button icon-button--primary support-launch-button" type="button" data-action="open-support-inquiry">
                 ${icon("message")}<span>問い合わせ</span>
@@ -4237,10 +4584,11 @@ function renderTopbar() {
 
 function renderProductSwitcher() {
   const userActive = isUserPageTopNavActive();
+  const authenticated = Boolean(state.user && getAuthToken());
   return `
     <div class="product-switcher" role="tablist" aria-label="Discat dashboard switch">
       ${
-        state.user
+        authenticated
           ? `
             <button class="product-switcher__item ${userActive ? "product-switcher__item--active" : ""}" type="button" role="tab" aria-selected="${userActive}" data-action="switch-user-page">
               <span>ユーザーページ</span>
@@ -4298,20 +4646,28 @@ function guardLoginButtonState() {
 }
 
 function renderLoginPanel() {
+  const guardProduct = state.activeProduct === "guard";
   const securityEnabled = state.security.enabled || state.security.loading || state.security.error;
-  const title = state.security.enabled && !state.security.verified ? "セキュリティ検証の実行" : "ログインが必要です";
+  const title = state.security.enabled && !state.security.verified
+    ? "セキュリティ検証の実行"
+    : guardProduct
+      ? "Guardへのログインが必要です"
+      : "ログインが必要です";
   const copy = state.security.enabled
     ? "Cloudflare Turnstileでアクセス元を確認してから、Discordログインへ進みます。"
-    : "Discordアカウントでログインすると、参加中のサーバーとBOTの設定を管理できます。";
-  const loginState = loginButtonState();
+    : guardProduct
+      ? "Discordアカウントでログインすると、管理権限を持つサーバーのGuard設定を管理できます。"
+      : "Discordアカウントでログインすると、参加中のサーバーとBOTの設定を管理できます。";
+  const loginState = guardProduct ? guardLoginButtonState() : loginButtonState();
+  const mascotUrl = guardProduct ? GUARD_MASCOT_URL : MASCOT_URL;
   return `
-    <section class="login-panel">
+    <section class="login-panel" data-login-product="${guardProduct ? "guard" : "one"}">
       <div class="login-panel__copy">
         <h2>${escapeHtml(title)}</h2>
         <p>${escapeHtml(copy)}</p>
         ${securityEnabled ? renderSecurityVerification() : ""}
         <div class="login-panel__actions">
-          <button class="icon-button icon-button--primary" type="button" data-action="login" ${loginBlocked() ? "disabled" : ""}>
+          <button class="icon-button icon-button--primary" type="button" data-action="login" ${currentLoginBlocked() ? "disabled" : ""}>
             ${icon(loginState.icon)}<span>${loginState.label}</span>
           </button>
           <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
@@ -4320,7 +4676,7 @@ function renderLoginPanel() {
         </div>
       </div>
       <div class="login-panel__mascot" aria-hidden="true">
-        <img src="${MASCOT_URL}" alt="" />
+        <img src="${escapeAttribute(mascotUrl)}" alt="" />
       </div>
     </section>
   `;
@@ -4471,6 +4827,17 @@ function renderDashboard() {
 }
 
 async function loadGuardData(options = {}) {
+  if (!state.user || !getAuthToken()) {
+    resetGuardAuthenticatedState();
+    if (options.renderAfter !== false) {
+      render();
+    }
+    return;
+  }
+  if (state.guard.inFlight) {
+    return;
+  }
+  state.guard.inFlight = true;
   const requestId = state.requestIds.guard + 1;
   state.requestIds.guard = requestId;
   state.guard.apiError = null;
@@ -4482,12 +4849,14 @@ async function loadGuardData(options = {}) {
 
   if (state.guard.apiBase) {
     try {
-      const [healthResult, statusResult, settingsResult, moderationResult, loggingResult, optionsResult] = await Promise.allSettled([
+      const [healthResult, statusResult, settingsResult, invitationResult, moderationResult, loggingResult, riskResult, optionsResult] = await Promise.allSettled([
         guardFetchJson(guardApiUrl("/health")),
         guardFetchJson(guardApiUrl("/status")),
         guardFetchJson(guardApiUrl("/verification/settings")),
+        guardFetchJson(guardApiUrl("/invitation/settings")),
         guardFetchJson(guardApiUrl("/moderation/settings")),
         guardFetchJson(guardApiUrl("/logging/settings")),
+        guardFetchJson(guardApiUrl("/risk/settings")),
         guardFetchJson(guardApiUrl("/verification/options")),
       ]);
       if (healthResult.status !== "fulfilled") {
@@ -4504,10 +4873,14 @@ async function loadGuardData(options = {}) {
       state.guard.events = [];
       state.guard.verificationSettings =
         settingsResult.status === "fulfilled" ? normalizeGuardVerificationSettings(settingsResult.value?.settings) : [];
+      state.guard.invitationSettings =
+        invitationResult.status === "fulfilled" ? normalizeGuardInvitationSettings(invitationResult.value?.settings) : [];
       state.guard.moderationSettings =
         moderationResult.status === "fulfilled" ? normalizeGuardModerationSettings(moderationResult.value?.settings) : [];
       state.guard.loggingSettings =
         loggingResult.status === "fulfilled" ? normalizeGuardLoggingSettings(loggingResult.value?.settings) : [];
+      state.guard.riskSettings =
+        riskResult.status === "fulfilled" ? normalizeGuardRiskSettings(riskResult.value?.settings) : [];
       state.guard.verificationRecords = [];
       if (optionsResult.status === "fulfilled" && optionsResult.value) {
         state.guard.verificationOptions = normalizeGuardVerificationOptions(optionsResult.value);
@@ -4516,8 +4889,10 @@ async function loadGuardData(options = {}) {
         state.guard.verificationOptionsError = optionsResult.reason instanceof Error ? optionsResult.reason.message : String(optionsResult.reason);
       }
       hydrateGuardVerificationForm();
+      hydrateGuardInvitationForm();
       hydrateGuardModerationForm();
       hydrateGuardLoggingForm();
+      hydrateGuardRiskForm();
       syncSupportGuildSelection();
       state.guard.source = "api";
       state.guard.loadedAt = new Date().toISOString();
@@ -4525,6 +4900,7 @@ async function loadGuardData(options = {}) {
       if (options.renderAfter !== false) {
         render();
       }
+      state.guard.inFlight = false;
       return;
     } catch (error) {
       if (requestId !== state.requestIds.guard) {
@@ -4549,18 +4925,23 @@ async function loadGuardData(options = {}) {
     state.guard.source = "sample";
   }
   state.guard.verificationSettings = [];
+  state.guard.invitationSettings = [];
   state.guard.moderationSettings = [];
   state.guard.loggingSettings = [];
+  state.guard.riskSettings = [];
   state.guard.verificationOptions = null;
   state.guard.verificationRecords = [];
   hydrateGuardVerificationForm();
+  hydrateGuardInvitationForm();
   hydrateGuardModerationForm();
   hydrateGuardLoggingForm();
+  hydrateGuardRiskForm();
   syncSupportGuildSelection();
   state.guard.loading = false;
   if (options.renderAfter !== false) {
     render();
   }
+  state.guard.inFlight = false;
 }
 
 function guardApiUrl(path) {
@@ -4590,25 +4971,49 @@ async function guardFetchJson(url, options = {}) {
     headers.set("Content-Type", "application/json");
   }
   const token = getAuthToken();
-  if (token && !headers.has("Authorization") && shouldAttachGuardAuth(url)) {
+  const trustedGuardUrl = shouldAttachGuardAuth(url);
+  if (!trustedGuardUrl) {
+    headers.delete("Authorization");
+  } else if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  const sentCurrentAuthToken = Boolean(
+    trustedGuardUrl && token && headers.get("Authorization") === `Bearer ${token}`,
+  );
   let response;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), SERVICE_STATUS_TIMEOUT_MS);
   try {
-    response = await fetch(url, { ...options, headers, cache: "no-store" });
+    response = await fetch(url, {
+      ...options,
+      headers,
+      cache: "no-store",
+      signal: controller.signal,
+    });
   } catch {
     throw new Error(guardConnectionErrorMessage(url));
+  } finally {
+    window.clearTimeout(timeoutId);
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     const detail = isObject(payload) ? (payload.message ?? payload.error) : "";
-    throw new Error(detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`);
+    const error = new ApiError(
+      response.status,
+      detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`,
+      response.headers.get("x-request-id") ?? undefined,
+    );
+    if (response.status === 401 && sentCurrentAuthToken && token === getAuthToken()) {
+      clearAuthToken();
+      resetSessionState();
+    }
+    throw error;
   }
   return response.json();
 }
 
 function shouldAttachGuardAuth(rawUrl) {
-  if (!state.guard.apiBase) {
+  if (!state.guard.apiBase || !isAllowedGuardApiBase(state.guard.apiBase)) {
     return false;
   }
   try {
@@ -4766,6 +5171,25 @@ function normalizeGuardModerationChannelIds(value) {
     .filter((item, index, array) => item && /^\d+$/.test(item) && array.indexOf(item) === index);
 }
 
+function normalizeGuardInvitationForm(form) {
+  return {
+    guild_id: String(form?.guild_id ?? ""),
+    enabled: form?.enabled === true,
+    dm_warning_enabled: form?.dm_warning_enabled !== false,
+  };
+}
+
+function normalizeGuardInvitationSettings(settings) {
+  if (!Array.isArray(settings)) {
+    return [];
+  }
+  return settings.map((item) => ({
+    ...normalizeGuardInvitationForm(item),
+    updated_at: item?.updated_at ?? null,
+    updated_by: item?.updated_by ?? null,
+  })).filter((item) => item.guild_id);
+}
+
 function normalizeGuardModerationChannelRows(value) {
   const rawItems = Array.isArray(value) ? value : value ? [value] : [];
   const seen = new Set();
@@ -4905,6 +5329,35 @@ function normalizeGuardLoggingSettings(settings) {
   }).filter((item) => item.guild_id);
 }
 
+function normalizeGuardRiskAction(value, fallback = "none") {
+  const action = String(value ?? fallback).toLowerCase();
+  return GUARD_RISK_ACTIONS.some((item) => item.id === action) ? action : fallback;
+}
+
+function normalizeGuardRiskForm(form) {
+  return {
+    guild_id: String(form?.guild_id ?? ""),
+    enabled: form?.enabled === true,
+    low_action: normalizeGuardRiskAction(form?.low_action, "none"),
+    medium_action: normalizeGuardRiskAction(form?.medium_action, "log"),
+    high_action: normalizeGuardRiskAction(form?.high_action, "log"),
+    critical_action: normalizeGuardRiskAction(form?.critical_action, "log"),
+    notify_admins_enabled: form?.notify_admins_enabled !== false,
+    notify_threshold: clampInteger(Number(form?.notify_threshold ?? 80), 0, 100),
+  };
+}
+
+function normalizeGuardRiskSettings(settings) {
+  if (!Array.isArray(settings)) {
+    return [];
+  }
+  return settings.map((item) => ({
+    ...normalizeGuardRiskForm(item),
+    updated_at: item?.updated_at ?? null,
+    updated_by: item?.updated_by ?? null,
+  })).filter((item) => item.guild_id);
+}
+
 function hydrateGuardVerificationForm() {
   const form = state.guard.verificationForm;
   const guilds = guardConfigurableGuilds();
@@ -4923,6 +5376,26 @@ function hydrateGuardVerificationForm() {
     state.guard.verificationForm = cloneState(savedForm);
   }
   updateDirtyState("guardVerification");
+}
+
+function hydrateGuardInvitationForm() {
+  const form = state.guard.invitationForm;
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  const fallbackGuildId = guilds[0]?.id ?? "";
+  const guildId = [
+    form.guild_id,
+    state.guard.invitationSettings[0]?.guild_id,
+    state.guard.verificationForm.guild_id,
+    state.guard.status.guilds?.[0]?.id,
+  ].find((id) => id && guildIds.has(id)) ?? fallbackGuildId;
+  const savedForm = guardInvitationFormFromSettings(guildId);
+  const preserveDirtyForm = isViewDirty("guardInvitation") && form.guild_id === guildId;
+  state.guard.savedInvitationForm = cloneState(savedForm);
+  if (!preserveDirtyForm) {
+    state.guard.invitationForm = cloneState(savedForm);
+  }
+  updateDirtyState("guardInvitation");
 }
 
 function hydrateGuardModerationForm() {
@@ -4967,8 +5440,32 @@ function hydrateGuardLoggingForm() {
   updateDirtyState("guardLogging");
 }
 
+function hydrateGuardRiskForm() {
+  const form = state.guard.riskForm;
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  const fallbackGuildId = guilds[0]?.id ?? "";
+  const guildId = [
+    form.guild_id,
+    state.guard.riskSettings[0]?.guild_id,
+    state.guard.verificationForm.guild_id,
+    state.guard.status.guilds?.[0]?.id,
+  ].find((id) => id && guildIds.has(id)) ?? fallbackGuildId;
+  const savedForm = guardRiskFormFromSettings(guildId);
+  const preserveDirtyForm = isViewDirty("guardRisk") && form.guild_id === guildId;
+  state.guard.savedRiskForm = cloneState(savedForm);
+  if (!preserveDirtyForm) {
+    state.guard.riskForm = cloneState(savedForm);
+  }
+  updateDirtyState("guardRisk");
+}
+
 function applyGuardVerificationSettingsForGuild(guildId) {
   rememberSavedGuardVerificationForm(guardVerificationFormFromSettings(guildId));
+}
+
+function applyGuardInvitationSettingsForGuild(guildId) {
+  rememberSavedGuardInvitationForm(guardInvitationFormFromSettings(guildId));
 }
 
 function applyGuardModerationSettingsForGuild(guildId) {
@@ -4979,10 +5476,16 @@ function applyGuardLoggingSettingsForGuild(guildId) {
   rememberSavedGuardLoggingForm(guardLoggingFormFromSettings(guildId));
 }
 
+function applyGuardRiskSettingsForGuild(guildId) {
+  rememberSavedGuardRiskForm(guardRiskFormFromSettings(guildId));
+}
+
 function applyGuardSettingsForGuild(guildId) {
   applyGuardVerificationSettingsForGuild(guildId);
+  applyGuardInvitationSettingsForGuild(guildId);
   applyGuardModerationSettingsForGuild(guildId);
   applyGuardLoggingSettingsForGuild(guildId);
+  applyGuardRiskSettingsForGuild(guildId);
 }
 
 function guardSourceText() {
@@ -5006,6 +5509,9 @@ function guardStatusClass() {
 }
 
 function renderGuardDashboard() {
+  if (!state.user || !getAuthToken()) {
+    return renderLoginPanel();
+  }
   const feature = activeGuardFeature();
   const selectedGuild = activeGuardSelectedGuild();
   const pageTitle =
@@ -5043,8 +5549,14 @@ function renderGuardFeatureContent(feature) {
   if (feature?.id === "verification") {
     return renderGuardVerification();
   }
+  if (feature?.id === "invitation") {
+    return renderGuardInvitation();
+  }
   if (feature?.id === "moderation") {
     return renderGuardModeration();
+  }
+  if (feature?.id === "risk") {
+    return renderGuardRisk();
   }
   if (feature?.id === "logging") {
     return renderGuardLogging();
@@ -5066,6 +5578,47 @@ function renderGuardFunctionSidebar() {
         ${visibleGuardFeatures().map(renderGuardFunctionNavItem).join("")}
       </div>
     </aside>
+  `;
+}
+
+function renderGuardInvitation() {
+  const form = normalizeGuardInvitationForm(state.guard.invitationForm);
+  const selectedGuild = guardInvitationSelectedGuild();
+  const dirty = isViewDirty("guardInvitation");
+  return `
+    ${renderGuardApiNotice()}
+    <section class="settings-panel guard-verification-panel" id="guard-invitation-settings">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("link")}<h2>招待リンク設定</h2></div>
+        <div class="settings-panel__header-actions">
+          <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "設定可能" : "未接続"}</span>
+          <button class="icon-button icon-button--primary save-button ${dirty ? "save-button--dirty" : ""}" type="button" data-action="save-guard-invitation-settings" data-save-view="guardInvitation" ${state.guard.invitationSaving ? "disabled" : ""}>
+            ${icon("save")}<span>${state.guard.invitationSaving ? "保存中" : "変更を保存"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="status-banner guard-privacy-note">
+        ${icon("shield")}<span>有効にすると、新しく作成されたサーバー招待リンクを検知してすぐに無効化します。既存のリンクは変更しません。</span>
+      </div>
+      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
+      ${state.guard.invitationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.invitationError)}</span></p>` : ""}
+      ${state.guard.invitationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.invitationMessage)}</span></p>` : ""}
+      <form class="settings-grid guard-verification-form" data-guard-invitation-form>
+        <div class="field guard-selected-server">
+          <span>選択中のサーバー</span>
+          <strong>${escapeHtml(selectedGuild?.name ?? "未選択")}</strong>
+          <small>${escapeHtml(selectedGuild?.id ?? "")}</small>
+        </div>
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-invitation-field="enabled" ${form.enabled ? "checked" : ""} />
+          <span><strong>招待リンクの自動無効化を有効にする</strong><small>新しい招待リンクを作成直後に削除します。</small></span>
+        </label>
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-invitation-field="dm_warning_enabled" ${form.dm_warning_enabled ? "checked" : ""} ${form.enabled ? "" : "disabled"} />
+          <span><strong>リンク作成者へDMで警告する</strong><small>無効化した招待リンクと理由を作成者へ通知します。</small></span>
+        </label>
+      </form>
+    </section>
   `;
 }
 
@@ -5602,6 +6155,70 @@ function renderGuardModerationTargetChannelsFieldAdditive(featureId, selectedVal
   `;
 }
 
+function renderGuardRiskActionField(field, label, value, description) {
+  return `
+    <label class="field">
+      <span>${escapeHtml(label)}</span>
+      <select data-guard-risk-field="${escapeAttribute(field)}">
+        ${GUARD_RISK_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === value ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
+      </select>
+      <small>${escapeHtml(description)}</small>
+    </label>
+  `;
+}
+
+function renderGuardRisk() {
+  const form = normalizeGuardRiskForm(state.guard.riskForm);
+  const selectedGuild = guardRiskSelectedGuild();
+  const dirty = isViewDirty("guardRisk");
+  const enabled = form.enabled;
+  return `
+    ${renderGuardApiNotice()}
+    <section class="settings-panel guard-verification-panel" id="guard-risk-settings">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("alert")}<h2>危険度判断</h2></div>
+        <div class="settings-panel__header-actions">
+          <span class="feature-status ${state.guard.source === "api" ? "feature-status--on" : ""}">${state.guard.source === "api" ? "設定可能" : "未接続"}</span>
+          <button class="icon-button icon-button--primary save-button ${dirty ? "save-button--dirty" : ""}" type="button" data-action="save-guard-risk-settings" data-save-view="guardRisk" ${state.guard.riskSaving ? "disabled" : ""}>
+            ${icon("save")}<span>${state.guard.riskSaving ? "保存中" : "変更を保存"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="status-banner guard-privacy-note">
+        ${icon("shield")}<span>参加者のアカウント年齢、招待元、Guardが観測した他サーバーのBAN・キック・荒らし検知を使って0〜100%で判定します。未観測の情報を推測して処置することはありません。</span>
+      </div>
+      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
+      ${state.guard.riskError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.riskError)}</span></p>` : ""}
+      ${state.guard.riskMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.riskMessage)}</span></p>` : ""}
+      <form class="guard-moderation-form" data-guard-risk-form>
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-risk-field="enabled" ${enabled ? "checked" : ""} />
+          <span><strong>危険度判断を有効にする</strong><small>無効時は参加者への自動処置・管理者DMを行いません。</small></span>
+        </label>
+        <div class="settings-grid guard-moderation-grid">
+          ${renderGuardRiskActionField("low_action", "低危険度（0〜39%）", form.low_action, "初期値は何もしません。")}
+          ${renderGuardRiskActionField("medium_action", "中危険度（40〜59%）", form.medium_action, "通常の注意対象です。")}
+          ${renderGuardRiskActionField("high_action", "高危険度（60〜79%）", form.high_action, "招待元が新しい場合などを含みます。")}
+          ${renderGuardRiskActionField("critical_action", "最高危険度（80〜100%）", form.critical_action, "特に危険度が高い参加者への処置です。")}
+        </div>
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" data-guard-risk-field="notify_admins_enabled" ${form.notify_admins_enabled ? "checked" : ""} ${enabled ? "" : "disabled"} />
+          <span><strong>高危険度を管理者へDM通知</strong><small>指定した危険度以上の参加者を、サーバー管理者全員へ通知します。</small></span>
+        </label>
+        <label class="field">
+          <span>管理者DMの通知しきい値（%）</span>
+          <input type="number" min="0" max="100" step="1" value="${escapeAttribute(form.notify_threshold)}" data-guard-risk-field="notify_threshold" ${enabled && form.notify_admins_enabled ? "" : "disabled"} />
+          <small>初期値は80%。80%以上を通知したい場合は80のままにしてください。</small>
+        </label>
+        <div class="settings-panel__header guard-risk-safety-note">
+          <div class="panel-heading">${icon("shield")}<h3>安全設定</h3></div>
+          <span>自動キック/BANは初期状態では選択されません。</span>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function renderGuardLogging() {
   const form = normalizeGuardLoggingForm(state.guard.loggingForm);
   const selectedGuild = guardLoggingSelectedGuild();
@@ -5848,6 +6465,10 @@ function guardVerificationSelectedGuild() {
   return guardConfigurableGuilds().find((guild) => guild.id === state.guard.verificationForm.guild_id) ?? null;
 }
 
+function guardInvitationSelectedGuild() {
+  return guardConfigurableGuilds().find((guild) => guild.id === state.guard.invitationForm.guild_id) ?? null;
+}
+
 function guardModerationSelectedGuild() {
   return guardConfigurableGuilds().find((guild) => guild.id === state.guard.moderationForm.guild_id) ?? null;
 }
@@ -5856,29 +6477,39 @@ function guardLoggingSelectedGuild() {
   return guardConfigurableGuilds().find((guild) => guild.id === state.guard.loggingForm.guild_id) ?? null;
 }
 
+function guardRiskSelectedGuild() {
+  return guardConfigurableGuilds().find((guild) => guild.id === state.guard.riskForm.guild_id) ?? null;
+}
+
 function activeGuardSelectedGuild() {
   const featureId = activeGuardFeature().id;
+  if (featureId === "invitation") {
+    return guardInvitationSelectedGuild();
+  }
   if (featureId === "moderation") {
     return guardModerationSelectedGuild();
   }
   if (featureId === "logging") {
     return guardLoggingSelectedGuild();
   }
+  if (featureId === "risk") {
+    return guardRiskSelectedGuild();
+  }
   return guardVerificationSelectedGuild();
 }
 
 function guardConfigurableGuilds() {
-  const guardGuildsById = new Map(guardLiveGuilds().map((guild) => [guild.id, guild]));
-  if (state.guilds.length === 0) {
-    return [...guardGuildsById.values()];
+  if (!state.user || !getAuthToken()) {
+    return [];
   }
+  const guardGuildsById = new Map(guardLiveGuilds().map((guild) => [guild.id, guild]));
   return state.guilds
     .filter((guild) => guild.can_manage && guardGuildsById.has(String(guild?.id ?? "")))
     .map((guild) => mergeGuardGuild(guild, guardGuildsById.get(String(guild?.id ?? ""))));
 }
 
 function guardInstallableGuilds() {
-  if (state.guilds.length === 0) {
+  if (!state.user || !getAuthToken() || state.guilds.length === 0) {
     return [];
   }
   const guardGuildIds = new Set(guardLiveGuilds().map((guild) => guild.id));
@@ -6016,6 +6647,12 @@ async function saveGuardVerificationSettings() {
     render();
     return false;
   }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    state.guard.verificationError = "ログインが必要です。";
+    render();
+    return false;
+  }
   const form = normalizeGuardVerificationForm(state.guard.verificationForm);
   if (!form.guild_id || !form.button_channel_id || !form.log_channel_id || !form.role_id) {
     state.guard.verificationError = "サーバー、認証ボタン配置チャンネル、ログチャンネル、付与ロールを指定してください。";
@@ -6034,6 +6671,9 @@ async function saveGuardVerificationSettings() {
       method: "POST",
       body: JSON.stringify({ settings: form }),
     });
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
     const nextSettings = normalizeGuardVerificationSettings([payload?.settings]);
     state.guard.verificationSettings = [
       ...state.guard.verificationSettings.filter((item) => item.guild_id !== form.guild_id),
@@ -6049,13 +6689,88 @@ async function saveGuardVerificationSettings() {
     } else {
       state.guard.verificationMessage = "認証設定を保存しました。";
     }
-    saved = true;
     await loadGuardData({ silent: true, renderAfter: false });
+    saved = guardSessionIsCurrent(guardSession);
   } catch (error) {
-    state.guard.verificationError = error instanceof Error ? error.message : String(error);
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.verificationError = error instanceof Error ? error.message : String(error);
+    }
   } finally {
-    state.guard.verificationSaving = false;
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.verificationSaving = false;
+      render();
+    }
+  }
+  return saved;
+}
+
+function updateGuardInvitationField(target, options = { renderAfter: true }) {
+  const field = target.dataset.guardInvitationField;
+  if (!field || !["enabled", "dm_warning_enabled"].includes(field)) {
+    return;
+  }
+  const form = normalizeGuardInvitationForm(state.guard.invitationForm);
+  form[field] = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
+  state.guard.invitationForm = normalizeGuardInvitationForm(form);
+  state.guard.invitationError = null;
+  updateDirtyState("guardInvitation");
+  if (options.renderAfter) {
     render();
+  }
+}
+
+async function saveGuardInvitationSettings() {
+  if (!state.guard.apiBase) {
+    state.guard.invitationError = "Guard APIに接続できません。";
+    render();
+    return false;
+  }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    state.guard.invitationError = "ログインが必要です。";
+    render();
+    return false;
+  }
+  const form = normalizeGuardInvitationForm(state.guard.invitationForm);
+  if (!form.guild_id) {
+    state.guard.invitationError = "サーバーを選択してください。";
+    render();
+    return false;
+  }
+
+  state.guard.invitationSaving = true;
+  state.guard.invitationError = null;
+  state.guard.invitationMessage = null;
+  render();
+
+  let saved = false;
+  try {
+    const payload = await guardFetchJson(guardApiUrl("/invitation/settings"), {
+      method: "POST",
+      body: JSON.stringify({ settings: form }),
+    });
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
+    const nextSettings = normalizeGuardInvitationSettings([payload?.settings]);
+    state.guard.invitationSettings = [
+      ...state.guard.invitationSettings.filter((item) => item.guild_id !== form.guild_id),
+      ...nextSettings,
+    ];
+    rememberSavedGuardInvitationForm(nextSettings[0] ?? form);
+    clearPendingNavigation();
+    state.guard.invitationMessage = "招待リンク設定を保存しました。";
+    await loadGuardData({ silent: true, renderAfter: false });
+    saved = guardSessionIsCurrent(guardSession);
+  } catch (error) {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.invitationError = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.invitationSaving = false;
+      render();
+    }
   }
   return saved;
 }
@@ -6203,6 +6918,12 @@ async function saveGuardModerationSettings() {
     render();
     return false;
   }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    state.guard.moderationError = "ログインが必要です。";
+    render();
+    return false;
+  }
   const form = normalizeGuardModerationForm(state.guard.moderationForm);
   if (!form.guild_id) {
     state.guard.moderationError = "サーバーを選択してください。";
@@ -6221,6 +6942,9 @@ async function saveGuardModerationSettings() {
       method: "POST",
       body: JSON.stringify({ settings: form }),
     });
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
     const nextSettings = normalizeGuardModerationSettings([payload?.settings]);
     state.guard.moderationSettings = [
       ...state.guard.moderationSettings.filter((item) => item.guild_id !== form.guild_id),
@@ -6229,13 +6953,17 @@ async function saveGuardModerationSettings() {
     rememberSavedGuardModerationForm(nextSettings[0] ?? form);
     clearPendingNavigation();
     state.guard.moderationMessage = "荒らし対策の設定を保存しました。";
-    saved = true;
     await loadGuardData({ silent: true, renderAfter: false });
+    saved = guardSessionIsCurrent(guardSession);
   } catch (error) {
-    state.guard.moderationError = error instanceof Error ? error.message : String(error);
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.moderationError = error instanceof Error ? error.message : String(error);
+    }
   } finally {
-    state.guard.moderationSaving = false;
-    render();
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.moderationSaving = false;
+      render();
+    }
   }
   return saved;
 }
@@ -6266,6 +6994,12 @@ async function saveGuardLoggingSettings() {
     render();
     return false;
   }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    state.guard.loggingError = "ログインが必要です。";
+    render();
+    return false;
+  }
   const form = normalizeGuardLoggingForm(state.guard.loggingForm);
   if (!form.guild_id) {
     state.guard.loggingError = "サーバーを選択してください。";
@@ -6284,6 +7018,9 @@ async function saveGuardLoggingSettings() {
       method: "POST",
       body: JSON.stringify({ settings: form }),
     });
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
     const nextSettings = normalizeGuardLoggingSettings([payload?.settings]);
     state.guard.loggingSettings = [
       ...state.guard.loggingSettings.filter((item) => item.guild_id !== form.guild_id),
@@ -6292,13 +7029,73 @@ async function saveGuardLoggingSettings() {
     rememberSavedGuardLoggingForm(nextSettings[0] ?? form);
     clearPendingNavigation();
     state.guard.loggingMessage = "ログ機能の設定を保存しました。";
-    saved = true;
     await loadGuardData({ silent: true, renderAfter: false });
+    saved = guardSessionIsCurrent(guardSession);
   } catch (error) {
-    state.guard.loggingError = error instanceof Error ? error.message : String(error);
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.loggingError = error instanceof Error ? error.message : String(error);
+    }
   } finally {
-    state.guard.loggingSaving = false;
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.loggingSaving = false;
+      render();
+    }
+  }
+  return saved;
+}
+
+async function saveGuardRiskSettings() {
+  if (!state.guard.apiBase) {
+    state.guard.riskError = "Guard APIに接続できません。";
     render();
+    return false;
+  }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    state.guard.riskError = "ログインが必要です。";
+    render();
+    return false;
+  }
+  const form = normalizeGuardRiskForm(state.guard.riskForm);
+  if (!form.guild_id) {
+    state.guard.riskError = "サーバーを選択してください。";
+    render();
+    return false;
+  }
+
+  state.guard.riskSaving = true;
+  state.guard.riskError = null;
+  state.guard.riskMessage = null;
+  render();
+
+  let saved = false;
+  try {
+    const payload = await guardFetchJson(guardApiUrl("/risk/settings"), {
+      method: "POST",
+      body: JSON.stringify({ settings: form }),
+    });
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
+    const nextSettings = normalizeGuardRiskSettings([payload?.settings]);
+    state.guard.riskSettings = [
+      ...state.guard.riskSettings.filter((item) => item.guild_id !== form.guild_id),
+      ...nextSettings,
+    ];
+    rememberSavedGuardRiskForm(nextSettings[0] ?? form);
+    clearPendingNavigation();
+    state.guard.riskMessage = "危険度判断の設定を保存しました。";
+    await loadGuardData({ silent: true, renderAfter: false });
+    saved = guardSessionIsCurrent(guardSession);
+  } catch (error) {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.riskError = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.riskSaving = false;
+      render();
+    }
   }
   return saved;
 }
@@ -6921,7 +7718,7 @@ function renderPlaylistTrack(track, options = {}) {
   const escapedTrackId = escapeAttribute(track.id);
   const escapedTitle = escapeAttribute(track.title);
   const previewDuration = playlistPreviewDuration(track.duration);
-  const previewUrl = playlistPreviewUrl(track.id, ownerUserId);
+  const previewUrl = playlistPreviewUrl(track.preview_url, track.id, ownerUserId);
   const rowClass = `playlist-track-row${readonly ? " playlist-track-row--readonly" : ""}`;
   return `
     <article class="${rowClass}">
@@ -6967,14 +7764,16 @@ function renderPlaylistTrack(track, options = {}) {
   `;
 }
 
-function playlistPreviewUrl(trackId, ownerUserId = null) {
-  const token = getAuthToken();
-  const query = token ? `?session_token=${encodeURIComponent(token)}` : "";
+function playlistPreviewUrl(previewPath, trackId, ownerUserId = null) {
+  const signedPath = String(previewPath ?? "").trim();
+  if (signedPath.startsWith("/")) {
+    return `${API_BASE_URL}${signedPath}`;
+  }
   const encodedTrackId = encodeURIComponent(trackId);
   const path = ownerUserId
     ? `/playlist/admin/users/${encodeURIComponent(ownerUserId)}/tracks/${encodedTrackId}/preview`
     : `/playlist/tracks/${encodedTrackId}/preview`;
-  return `${API_BASE_URL}${path}${query}`;
+  return `${API_BASE_URL}${path}`;
 }
 
 function syncPlaylistPlayers() {
@@ -7050,6 +7849,32 @@ function togglePlaylistTrackPlayback(trackId) {
         state.playlistError = "プレビューを再生できませんでした。時間をおいて再試行してください。";
         render();
       });
+  }
+}
+
+function updateGuardRiskField(target, options = { renderAfter: true }) {
+  const field = target.dataset.guardRiskField;
+  if (!field) {
+    return;
+  }
+  const form = normalizeGuardRiskForm(state.guard.riskForm);
+  const value = target instanceof HTMLInputElement && target.type === "checkbox"
+    ? target.checked
+    : field === "notify_threshold"
+      ? clampInteger(Number(target.value), 0, 100)
+      : target.value;
+  if (field === "low_action" || field === "medium_action" || field === "high_action" || field === "critical_action") {
+    form[field] = normalizeGuardRiskAction(value, field === "low_action" ? "none" : "log");
+  } else if (field === "enabled" || field === "notify_admins_enabled") {
+    form[field] = Boolean(value);
+  } else if (field === "notify_threshold") {
+    form.notify_threshold = value;
+  }
+  state.guard.riskForm = form;
+  state.guard.riskError = null;
+  updateDirtyState("guardRisk");
+  if (options.renderAfter) {
+    render();
   }
 }
 
@@ -9003,7 +9828,7 @@ function renderUnsavedChangesPrompt() {
   if (!hasPendingNavigation() || !hasUnsavedChanges()) {
     return "";
   }
-  const saving = state.saving || state.guard.verificationSaving || state.guard.moderationSaving || state.guard.loggingSaving;
+  const saving = state.saving || state.guard.verificationSaving || state.guard.invitationSaving || state.guard.moderationSaving || state.guard.loggingSaving || state.guard.riskSaving;
   return `
     <div class="unsaved-bar" role="alert" aria-live="assertive">
       <div class="unsaved-bar__message">
@@ -9162,11 +9987,17 @@ function loadActivePageData() {
 async function saveActiveSettings() {
   if (state.activeProduct === "guard") {
     const featureId = activeGuardFeature().id;
+    if (featureId === "invitation") {
+      return saveGuardInvitationSettings();
+    }
     if (featureId === "moderation") {
       return saveGuardModerationSettings();
     }
     if (featureId === "logging") {
       return saveGuardLoggingSettings();
+    }
+    if (featureId === "risk") {
+      return saveGuardRiskSettings();
     }
     return saveGuardVerificationSettings();
   }
@@ -9186,7 +10017,10 @@ async function savePendingSettings() {
 
 function discardActiveSettings() {
   if (state.activeProduct === "guard") {
-    if (activeGuardFeature().id === "moderation") {
+    if (activeGuardFeature().id === "invitation") {
+      state.guard.invitationForm = cloneState(state.guard.savedInvitationForm) ?? normalizeGuardInvitationForm(null);
+      state.dirtyViews.guardInvitation = false;
+    } else if (activeGuardFeature().id === "moderation") {
       state.guard.moderationForm = cloneState(state.guard.savedModerationForm) ?? normalizeGuardModerationForm(null);
       state.dirtyViews.guardModeration = false;
     } else if (activeGuardFeature().id === "logging") {
@@ -9224,6 +10058,9 @@ function handleSubmit(event) {
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-verification-form]")) {
     event.preventDefault();
     void saveGuardVerificationSettings();
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-invitation-form]")) {
+    event.preventDefault();
+    void saveGuardInvitationSettings();
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-moderation-form]")) {
     event.preventDefault();
     void saveGuardModerationSettings();
@@ -9346,6 +10183,8 @@ function handleClick(event) {
       }
     } else if (action === "save-guard-verification-settings") {
       void saveGuardVerificationSettings();
+    } else if (action === "save-guard-invitation-settings") {
+      void saveGuardInvitationSettings();
     } else if (action === "save-guard-moderation-settings") {
       void saveGuardModerationSettings();
     } else if (action === "remove-guard-moderation-channel") {
@@ -9356,6 +10195,8 @@ function handleClick(event) {
       removeGuardModerationNgWord(actionEl.dataset.guardModerationFeature, actionEl.dataset.ngWord);
     } else if (action === "save-guard-logging-settings") {
       void saveGuardLoggingSettings();
+    } else if (action === "save-guard-risk-settings") {
+      void saveGuardRiskSettings();
     } else if (action === "login") {
       if (currentLoginBlocked()) {
         state.security.error =
@@ -9582,10 +10423,14 @@ function handleChange(event) {
 
   if (target.dataset.guardVerificationField) {
     updateGuardVerificationField(target, { renderAfter: true });
+  } else if (target.dataset.guardInvitationField) {
+    updateGuardInvitationField(target, { renderAfter: true });
   } else if (target.dataset.guardModerationField) {
     updateGuardModerationField(target, { renderAfter: true });
   } else if (target.dataset.guardLoggingField) {
     updateGuardLoggingField(target, { renderAfter: true });
+  } else if (target.dataset.guardRiskField) {
+    updateGuardRiskField(target, { renderAfter: true });
   } else if (target.dataset.supportField) {
     updateSupportField(target);
   } else if (target.dataset.settingsField) {
@@ -9644,6 +10489,11 @@ function handleInput(event) {
 
   if (target.dataset.guardLoggingField) {
     updateGuardLoggingField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.guardRiskField) {
+    updateGuardRiskField(target, { renderAfter: false });
     return;
   }
 
