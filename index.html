@@ -10,17 +10,35 @@
             `https://${window.location.host}${window.location.pathname}${window.location.search}${window.location.hash}`,
           );
         }
-        const productParam = new URLSearchParams(window.location.search).get("product");
+        const queryParams = new URLSearchParams(window.location.search);
+        const fragmentParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        const productParam = queryParams.get("product");
         let storedProduct = null;
+        let storedSession = false;
         try {
           storedProduct = window.localStorage.getItem("discat_dashboard_product");
+          storedSession = Boolean(window.localStorage.getItem("discat_one_session_token"));
         } catch {
           storedProduct = null;
+          storedSession = false;
         }
         const initialProduct = ["one", "guard"].includes(productParam) ? productParam : storedProduct;
         if (["one", "guard"].includes(initialProduct)) {
           document.documentElement.dataset.dashboardProduct = initialProduct;
         }
+        let cookieSession = false;
+        try {
+          cookieSession = document.cookie
+            .split(";")
+            .some((part) => part.trim().startsWith("discat_one_session_token="));
+        } catch {
+          cookieSession = false;
+        }
+        const callbackSession = Boolean(
+          queryParams.get("session_token") || fragmentParams.get("session_token"),
+        );
+        document.documentElement.dataset.dashboardAuth =
+          storedSession || cookieSession || callbackSession ? "pending" : "guest";
       })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -50,8 +68,8 @@
     <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
     <link rel="manifest" href="./site.webmanifest?v=20260511-guard-save-1" />
     <meta http-equiv="Cache-Control" content="no-store" />
-    <link rel="stylesheet" href="./styles.css?v=20260710-smooth-loading-6" />
-    <script src="./app.js?v=20260710-guard-auth-storage-3-smooth-loading-6" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=20260710-smooth-loading-6-mobile-guest-1" />
+    <script src="./app.js?v=20260710-guard-auth-storage-3-smooth-loading-6-mobile-guest-1" defer></script>
   </head>
   <body>
     <div id="root"></div>

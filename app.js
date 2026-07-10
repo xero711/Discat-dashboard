@@ -802,6 +802,7 @@ const state = {
 };
 
 const root = document.getElementById("root");
+const turnstileCompactMediaQuery = window.matchMedia("(max-width: 380px)");
 let hostRefreshTimerId = null;
 let serviceStatusRefreshTimerId = null;
 let guardStatusRefreshTimerId = null;
@@ -858,6 +859,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("storage", handleAuthTokenStorageChange);
 document.addEventListener("keydown", handleKeydown);
 document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+turnstileCompactMediaQuery.addEventListener("change", handleTurnstileViewportChange);
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
@@ -1238,9 +1240,26 @@ function stopGuardAutoRefresh() {
   }
 }
 
-function updateDocumentForProduct() {
+function dashboardAuthPresentationState() {
+  const hasToken = Boolean(getAuthToken());
+  if (state.user && hasToken) {
+    return "authenticated";
+  }
+  if (hasToken && authCheckingActive()) {
+    return "pending";
+  }
+  return "guest";
+}
+
+function syncDocumentAuthPresentation(authState = dashboardAuthPresentationState()) {
+  document.documentElement.dataset.dashboardAuth = authState;
+  document.body.classList.toggle("body--guest", authState === "guest");
+}
+
+function updateDocumentForProduct(authState = dashboardAuthPresentationState()) {
   const product = PRODUCT_META[state.activeProduct] ?? PRODUCT_META.one;
   const isGuard = product.id === "guard";
+  const guest = authState === "guest";
   const description = isGuard
     ? "認証、監査ログ、重複端末検知を管理するDiscat Guardセキュリティダッシュボード"
     : "Discat Botの導入、設定、読み上げを管理するDiscat Oneダッシュボード";
@@ -1248,7 +1267,7 @@ function updateDocumentForProduct() {
   const shareUrl = isGuard ? `${PUBLIC_DASHBOARD_URL}guard/` : `${PUBLIC_DASHBOARD_URL}one/`;
   document.title = `${product.label} Dashboard`;
   setMetaContent("description", description);
-  setMetaContent("theme-color", isGuard ? "#081a22" : "#21183f");
+  setMetaContent("theme-color", guest ? "#211a48" : isGuard ? "#081a22" : "#21183f");
   setMetaContent("og:site_name", product.label, "property");
   setMetaContent("og:title", `${product.label} Dashboard`, "property");
   setMetaContent("og:description", description, "property");
@@ -1264,6 +1283,7 @@ function updateDocumentForProduct() {
   setSiteIcon(isGuard ? GUARD_SITE_ICON_URL : ONE_SITE_ICON_URL);
   document.documentElement.dataset.dashboardProduct = product.id;
   document.body.classList.toggle("body--guard", isGuard);
+  syncDocumentAuthPresentation(authState);
 }
 
 function setMetaContent(name, content, attr = "name") {
@@ -4005,6 +4025,7 @@ function syncTurnstileWidget() {
       state.security.widgetId = turnstile.render(container, {
         sitekey: state.security.siteKey,
         theme: "dark",
+        size: turnstileCompactMediaQuery.matches ? "compact" : "flexible",
         action: "login",
         callback: (token) => {
           void handleTurnstileToken(token);
@@ -4032,6 +4053,28 @@ function syncTurnstileWidget() {
         error instanceof Error ? error.message : "Turnstileを読み込めませんでした。";
       render();
     });
+}
+
+function handleTurnstileViewportChange() {
+  const container = root.querySelector("[data-turnstile-widget]");
+  if (
+    !(container instanceof HTMLElement) ||
+    !state.security.enabled ||
+    state.security.loading ||
+    state.security.verified ||
+    state.security.verifying
+  ) {
+    return;
+  }
+  if (state.security.widgetId !== null && window.turnstile?.remove) {
+    try {
+      window.turnstile.remove(state.security.widgetId);
+    } catch {
+      // Re-rendering the login panel below also discards a stale widget container.
+    }
+  }
+  state.security.widgetId = null;
+  render({ force: true });
 }
 
 function resetGuardAuthenticatedState() {
@@ -4318,6 +4361,8 @@ function render(options = {}) {
     ? Number.parseFloat(window.getComputedStyle(existingConnectionLayer).opacity)
     : null;
   const loadingContext = blockingLoadingContext();
+  const authPresentation = dashboardAuthPresentationState();
+  syncDocumentAuthPresentation(authPresentation);
   const loadingFailed = !loadingContext && (
     (state.activeProduct === "one" && serviceBlockedActive()) ||
     (state.activeProduct === "guard" && guardMaintenanceActive())
@@ -4342,6 +4387,9 @@ function render(options = {}) {
   const guardOnly = state.activeProduct === "guard" && Boolean(loadingContext || mainContent.includes("data-service-status"));
   const statusOnly = serviceOnly || guardOnly;
   const shellClasses = ["app-shell"];
+  if (authPresentation === "guest") {
+    shellClasses.push("app-shell--guest");
+  }
   if (state.activeProduct === "guard") {
     shellClasses.push("app-shell--guard");
   }
@@ -4370,7 +4418,7 @@ function render(options = {}) {
       ${statusOnly ? "" : renderUnsavedChangesPrompt()}
     </div>
   `;
-  updateDocumentForProduct();
+  updateDocumentForProduct(authPresentation);
   enhanceSelectControls();
   if (state.productTransition && !state.productTransition.rendered) {
     state.productTransition = { ...state.productTransition, rendered: true };
