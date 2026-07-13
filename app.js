@@ -44,6 +44,81 @@ const TTS_ENGINE_FIXED = "voicevox";
 const HOST_CONTROL_ADMIN_DISCORD_USER_ID = "907254481371144243";
 const SUPPORT_MESSAGE_MAX_LENGTH = 1900;
 const VC_NOTIFICATION_REACTION_EMOJI = "🔔";
+const AUDIT_LOG_LIMIT = 100;
+const DASHBOARD_ACCESS_SESSION_PREFIX = "discat_dashboard_access_logged";
+const AUDIT_ACTION_LABELS = {
+  "dashboard.access": "ダッシュボードへのアクセス",
+  "dashboard_access": "ダッシュボードへのアクセス",
+  "guild_settings.update": "読み上げ設定の保存",
+  "guild_features.update": "サーバー機能設定の保存",
+  "guard.verification.update": "認証設定の保存",
+  "guard.invitation.update": "招待リンク設定の保存",
+  "guard.moderation.update": "荒らし対策設定の保存",
+  "guard.logging.update": "ログ機能設定の保存",
+  "guard.risk.update": "危険度判断設定の保存",
+};
+const AUDIT_FIELD_LABELS = {
+  value: "値",
+  guild_id: "サーバーID",
+  enabled: "有効状態",
+  channel_id: "チャンネル",
+  button_channel_lock_enabled: "認証ボタンのチャンネル制限",
+  button_channel_id: "認証ボタン配置チャンネル",
+  log_channel_id: "ログチャンネル",
+  log_channel_ids: "ログチャンネル",
+  role_id: "ロール",
+  duplicate_action: "同一端末検知時の処置",
+  restricted_guild_check_enabled: "荒らしサーバー参加チェック",
+  dm_warning_enabled: "DM警告",
+  features: "機能",
+  events: "イベント",
+  action: "処置",
+  low_action: "低危険度の処置",
+  medium_action: "中危険度の処置",
+  high_action: "高危険度の処置",
+  critical_action: "重大危険度の処置",
+  notify_admins_enabled: "管理者への通知",
+  notify_threshold: "通知する危険度",
+  excluded_channel_ids: "検知対象外チャンネル",
+  target_channel_ids: "対象チャンネル",
+  ng_words: "NGワード",
+  interval_seconds: "検知間隔",
+  threshold: "しきい値",
+  tts_enabled: "読み上げ",
+  tts_engine: "読み上げエンジン",
+  tts_speaker: "声",
+  tts_volume: "音量",
+  tts_speed: "速度",
+  tts_pitch: "ピッチ",
+  tts_intonation: "抑揚",
+  tts_max_text_length: "読み上げ文字数",
+  tts_read_sender: "送信者名読み上げ",
+  tts_keep_panel_bottom: "接続パネル下固定",
+  voice_join_announce_enabled: "入室読み上げ",
+  voice_move_announce_enabled: "移動読み上げ",
+  user_dictionary: "ユーザー辞書",
+  auto_join_rules: "自動読み上げルール",
+  welcome_message: "歓迎メッセージ",
+  message: "メッセージ",
+  global_chat_channel_id: "グローバルチャット",
+  sticky_messages: "固定メッセージ",
+  vc_notification: "VC通知",
+  bump_rank: "Bump/Upランク",
+  temporary_voice: "一時VC",
+  ticket: "チケット",
+  server_rank: "サーバーランク",
+};
+const AUDIT_VALUE_LABELS = {
+  none: "何もしない",
+  notify: "通知のみ",
+  log: "ログに記録",
+  warn: "警告",
+  delete: "削除",
+  timeout: "タイムアウト",
+  kick: "キック",
+  ban: "BAN",
+};
+const AUDIT_IGNORED_FIELDS = new Set(["updated_at", "updated_by", "created_at"]);
 
 const SUPPORT_PRODUCTS = [
   { id: "one", label: "Discat One" },
@@ -232,6 +307,15 @@ const SETTINGS_PAGES = [
     view: "features",
   },
   {
+    id: "audit-log",
+    label: "変更ログ",
+    eyebrow: "履歴",
+    description: "アクセスと設定変更の履歴",
+    help: "このサーバーのダッシュボードアクセスと、設定を保存したユーザー・変更内容を確認します。",
+    icon: "history",
+    view: "audit",
+  },
+  {
     id: "admin",
     label: "管理者用",
     eyebrow: "BOT管理",
@@ -302,6 +386,13 @@ const GUARD_FEATURES = [
     description: "参加、BAN、招待、ロール、チャンネル、VC状態、メッセージなどのログ送信先を設定します。",
     help: "イベントごとに有効化とログを送るチャンネルを設定します。",
     icon: "activity",
+  },
+  {
+    id: "audit-log",
+    label: "変更ログ",
+    description: "ダッシュボードへのアクセスとGuard設定の変更履歴を確認します。",
+    help: "このサーバーのダッシュボードアクセスと、設定を保存したユーザー・変更内容を確認します。",
+    icon: "history",
   },
   {
     id: "admin",
@@ -608,6 +699,17 @@ function createDefaultSupportState() {
   };
 }
 
+function createAuditLogState(requestId = 0) {
+  return {
+    guildId: "",
+    logs: [],
+    loading: false,
+    error: null,
+    loadedAt: null,
+    requestId,
+  };
+}
+
 const state = {
   activeProduct: readInitialProduct(),
   productTransition: null,
@@ -668,6 +770,10 @@ const state = {
   activeRankingPeriod: "daily",
   activeUserPanelTab: "playlist",
   support: createDefaultSupportState(),
+  auditLogs: {
+    one: createAuditLogState(),
+    guard: createAuditLogState(),
+  },
   security: {
     loading: true,
     enabled: false,
@@ -714,6 +820,7 @@ const state = {
     hasLoadedApiSettings: false,
     loadedAt: null,
     activeFeature: "verification",
+    auditGuildId: "",
     source: "sample",
     status: normalizeGuardStatus(null),
     verificationSettings: [],
@@ -809,6 +916,8 @@ let guardStatusRefreshTimerId = null;
 let guildOptionsRefreshTimerId = null;
 let guildOptionsRefreshInFlight = false;
 let guildOptionsRenderPending = false;
+const dashboardAccessRequests = new Map();
+const dashboardAccessLoggedInMemory = new Set();
 let turnstileScriptPromise = null;
 let turnstileConfigPromise = null;
 let turnstileConfigLoadedAt = 0;
@@ -1166,7 +1275,12 @@ async function loadOneDashboardData() {
       render();
       return;
     }
-    if (
+    if (state.selectedGuildId) {
+      void ensureDashboardAccessLogged("one", state.selectedGuildId);
+    }
+    if (state.selectedGuildId && activeSettingsView() === "audit") {
+      await loadAuditLogs("one", state.selectedGuildId);
+    } else if (
       state.selectedGuildId &&
       ["tts", "features"].includes(activeSettingsView()) &&
       (guildDataForActiveViewMissing() || guildRankingsForActiveViewMissing())
@@ -1206,7 +1320,16 @@ async function loadGuardDashboardData() {
   }
 
   if (state.guard.loadedAt) {
-    render();
+    syncGuardAuditGuildId();
+    const guildId = selectedAuditGuildId("guard");
+    if (guildId) {
+      void ensureDashboardAccessLogged("guard", guildId);
+    }
+    if (activeGuardFeature().id === "audit-log" && guildId) {
+      await loadAuditLogs("guard", guildId);
+    } else {
+      render();
+    }
     void loadGuardStatus({ silent: true });
     return;
   }
@@ -1215,7 +1338,16 @@ async function loadGuardDashboardData() {
   await loadGuardData({ silent: true, renderAfter: false });
   hydrateGuardVerificationForm();
   hydrateGuardModerationForm();
-  render();
+  syncGuardAuditGuildId();
+  const guildId = selectedAuditGuildId("guard");
+  if (guildId) {
+    void ensureDashboardAccessLogged("guard", guildId);
+  }
+  if (activeGuardFeature().id === "audit-log" && guildId) {
+    await loadAuditLogs("guard", guildId);
+  } else {
+    render();
+  }
 }
 
 function stopOneAutoRefresh() {
@@ -1550,6 +1682,12 @@ const api = {
   featureSettings: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/feature-settings`),
   guildRankings: (guildId, period) =>
     request(`/guilds/${encodeURIComponent(guildId)}/rankings?period=${encodeURIComponent(period)}`),
+  auditLogs: (guildId, limit = AUDIT_LOG_LIMIT) =>
+    request(`/audit-logs?guild_id=${encodeURIComponent(guildId)}&limit=${encodeURIComponent(limit)}`),
+  recordDashboardAccess: (guildId) =>
+    request(`/guilds/${encodeURIComponent(guildId)}/dashboard-access`, {
+      method: "POST",
+    }),
   ttsOptions: (guildId) => request(`/guilds/${encodeURIComponent(guildId)}/tts-options`),
   playlist: () => request("/playlist/me"),
   searchPlaylistTracks: (query) =>
@@ -1665,10 +1803,15 @@ async function loadAccount() {
         ? state.selectedGuildId
         : (guilds.find((guild) => guild.bot_present && guild.can_manage)?.id ?? null);
     syncSupportGuildSelection();
+    if (state.selectedGuildId) {
+      void ensureDashboardAccessLogged("one", state.selectedGuildId);
+    }
     if (!state.serviceStatus.loading) {
       render();
     }
-    if (state.selectedGuildId && ["tts", "features"].includes(activeSettingsView())) {
+    if (state.selectedGuildId && activeSettingsView() === "audit") {
+      await loadAuditLogs("one", state.selectedGuildId);
+    } else if (state.selectedGuildId && ["tts", "features"].includes(activeSettingsView())) {
       await loadGuildData(state.selectedGuildId);
     }
     if (activeSettingsView() === "host") {
@@ -3532,7 +3675,7 @@ function hasUnsavedChanges() {
 
 function activeGuardDirtyView() {
   const featureId = activeGuardFeature().id;
-  if (featureId === "admin") {
+  if (featureId === "admin" || featureId === "audit-log") {
     return "guardAdmin";
   }
   if (featureId === "moderation") {
@@ -3572,6 +3715,7 @@ async function savePatch(patch, applyUpdatedSettings = rememberSavedSettings) {
     const updated = await api.updateSettings(state.selectedGuildId, patch);
     if (requestId === state.requestIds.save) {
       applyUpdatedSettings(updated);
+      invalidateAuditLogs("one", state.selectedGuildId);
       clearPendingNavigation();
       saved = true;
     }
@@ -3638,6 +3782,7 @@ async function saveFeatureSettings() {
     const updated = await api.updateFeatureSettings(state.selectedGuildId, buildFeatureSettingsPatch());
     if (requestId === state.requestIds.save) {
       rememberSavedFeatureSettings(updated);
+      invalidateAuditLogs("one", state.selectedGuildId);
       clearPendingNavigation();
       saved = true;
       if (state.selectedGuildId && ["bump-rank", "server-rank"].includes(activeSettingsPage().id)) {
@@ -3692,6 +3837,7 @@ async function publishTicketPanel() {
       return false;
     }
     rememberSavedFeatureSettings(refreshed);
+    invalidateAuditLogs("one", state.selectedGuildId);
     state.message = result?.panel_url
       ? `チケットパネルを送信しました: ${result.panel_url}`
       : "チケットパネルを送信しました。";
@@ -4093,6 +4239,7 @@ function resetGuardAuthenticatedState() {
   state.guard.mutationGeneration = 0;
   state.guard.hasLoadedApiSettings = false;
   state.guard.loadedAt = null;
+  state.guard.auditGuildId = "";
   state.guard.source = "auth-required";
   state.guard.status = normalizeGuardStatus(null);
   state.guard.verificationSettings = [];
@@ -4157,6 +4304,7 @@ function resetGuardAuthenticatedState() {
   state.dirtyViews.guardModeration = false;
   state.dirtyViews.guardLogging = false;
   state.dirtyViews.guardRisk = false;
+  resetAuditLogs("guard");
 }
 
 function resetSessionState() {
@@ -4227,6 +4375,7 @@ function resetSessionState() {
   state.activeRankingPeriod = "daily";
   state.activeUserPanelTab = "playlist";
   state.support = createDefaultSupportState();
+  resetAuditLogs("one");
   resetGuardAuthenticatedState();
   resetDirtyViews();
   render();
@@ -5534,7 +5683,244 @@ async function guardFetchJson(url, options = {}) {
     }
     throw error;
   }
-  return response.json();
+  if (response.status === 204) {
+    return undefined;
+  }
+  return response.json().catch(() => null);
+}
+
+function normalizeAuditProduct(productId) {
+  return normalizeProductId(productId) ?? "one";
+}
+
+function auditLogState(productId) {
+  return state.auditLogs[normalizeAuditProduct(productId)];
+}
+
+function selectedAuditGuild(productId) {
+  const product = normalizeAuditProduct(productId);
+  if (product === "guard") {
+    const guildId = state.guard.auditGuildId || state.guard.verificationForm.guild_id;
+    return guardConfigurableGuilds().find((guild) => guild.id === guildId) ?? null;
+  }
+  return selectedGuild();
+}
+
+function selectedAuditGuildId(productId) {
+  return selectedAuditGuild(productId)?.id ?? "";
+}
+
+function auditLogViewIsActive(productId, guildId = selectedAuditGuildId(productId)) {
+  const product = normalizeAuditProduct(productId);
+  if (state.activeProduct !== product || !guildId || selectedAuditGuildId(product) !== guildId) {
+    return false;
+  }
+  return product === "guard"
+    ? activeGuardFeature().id === "audit-log"
+    : activeSettingsView() === "audit";
+}
+
+function dashboardAccessSessionKey(productId, guildId) {
+  const product = normalizeAuditProduct(productId);
+  const userId = String(state.user?.discord_user_id ?? state.user?.id ?? "unknown");
+  return `${DASHBOARD_ACCESS_SESSION_PREFIX}:${product}:${userId}:${String(guildId)}`;
+}
+
+function dashboardAccessWasLogged(key) {
+  if (dashboardAccessLoggedInMemory.has(key)) {
+    return true;
+  }
+  try {
+    const logged = sessionStorage.getItem(key) === "1";
+    if (logged) {
+      dashboardAccessLoggedInMemory.add(key);
+    }
+    return logged;
+  } catch {
+    return false;
+  }
+}
+
+function rememberDashboardAccessLogged(key) {
+  dashboardAccessLoggedInMemory.add(key);
+  try {
+    sessionStorage.setItem(key, "1");
+  } catch {
+    // In-memory tracking still prevents duplicate requests in restricted contexts.
+  }
+}
+
+async function ensureDashboardAccessLogged(productId, guildId) {
+  const product = normalizeAuditProduct(productId);
+  const normalizedGuildId = String(guildId ?? "").trim();
+  if (!normalizedGuildId || !state.user || !getAuthToken()) {
+    return false;
+  }
+  if (product === "guard" && !state.guard.apiBase) {
+    return false;
+  }
+  const key = dashboardAccessSessionKey(product, normalizedGuildId);
+  if (dashboardAccessWasLogged(key)) {
+    return true;
+  }
+  if (dashboardAccessRequests.has(key)) {
+    return dashboardAccessRequests.get(key);
+  }
+
+  const accessRequest = (async () => {
+    try {
+      if (product === "guard") {
+        await guardFetchJson(guardApiUrl("/dashboard-access"), {
+          method: "POST",
+          body: JSON.stringify({ guild_id: normalizedGuildId }),
+        });
+      } else {
+        await api.recordDashboardAccess(normalizedGuildId);
+      }
+      rememberDashboardAccessLogged(key);
+      const audit = auditLogState(product);
+      if (audit.guildId === normalizedGuildId) {
+        audit.loadedAt = null;
+      }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      dashboardAccessRequests.delete(key);
+    }
+  })();
+  dashboardAccessRequests.set(key, accessRequest);
+  return accessRequest;
+}
+
+function invalidateAuditLogs(productId, guildId) {
+  const product = normalizeAuditProduct(productId);
+  const normalizedGuildId = String(guildId ?? "").trim();
+  if (!normalizedGuildId) {
+    return;
+  }
+  const audit = auditLogState(product);
+  if (audit.guildId && audit.guildId !== normalizedGuildId) {
+    return;
+  }
+  audit.requestId += 1;
+  audit.guildId = normalizedGuildId;
+  audit.logs = [];
+  audit.loading = false;
+  audit.error = null;
+  audit.loadedAt = null;
+}
+
+function resetAuditLogs(productId) {
+  const product = normalizeAuditProduct(productId);
+  const nextRequestId = auditLogState(product).requestId + 1;
+  state.auditLogs[product] = createAuditLogState(nextRequestId);
+}
+
+async function loadAuditLogs(productId, guildId = selectedAuditGuildId(productId), options = {}) {
+  const product = normalizeAuditProduct(productId);
+  const normalizedGuildId = String(guildId ?? "").trim();
+  if (!normalizedGuildId || !state.user || !getAuthToken()) {
+    return false;
+  }
+  const audit = auditLogState(product);
+  const sameGuild = audit.guildId === normalizedGuildId;
+  if (!options.force && sameGuild && audit.loadedAt && !audit.error) {
+    return true;
+  }
+
+  const requestId = audit.requestId + 1;
+  audit.requestId = requestId;
+  audit.guildId = normalizedGuildId;
+  audit.loading = true;
+  audit.error = null;
+  if (!sameGuild) {
+    audit.logs = [];
+    audit.loadedAt = null;
+  }
+  if (auditLogViewIsActive(product, normalizedGuildId)) {
+    render();
+  }
+
+  await ensureDashboardAccessLogged(product, normalizedGuildId);
+  if (requestId !== audit.requestId || selectedAuditGuildId(product) !== normalizedGuildId) {
+    return false;
+  }
+
+  try {
+    const payload = product === "guard"
+      ? await guardFetchJson(
+          `${guardApiUrl("/audit-logs")}?guild_id=${encodeURIComponent(normalizedGuildId)}&limit=${AUDIT_LOG_LIMIT}`,
+        )
+      : await api.auditLogs(normalizedGuildId, AUDIT_LOG_LIMIT);
+    if (requestId !== audit.requestId || selectedAuditGuildId(product) !== normalizedGuildId) {
+      return false;
+    }
+    audit.logs = normalizeAuditLogs(payload, normalizedGuildId);
+    audit.loadedAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    if (requestId === audit.requestId) {
+      audit.error = error instanceof Error ? error.message : "変更ログを取得できませんでした。";
+    }
+    return false;
+  } finally {
+    if (requestId === audit.requestId) {
+      audit.loading = false;
+      if (auditLogViewIsActive(product, normalizedGuildId)) {
+        render();
+      }
+    }
+  }
+}
+
+function normalizeAuditLogs(payload, guildId) {
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.logs)
+      ? payload.logs
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
+  const normalizedGuildId = String(guildId ?? "");
+  return rows
+    .map((row, index) => normalizeAuditLog(row, index))
+    .filter((row) => !normalizedGuildId || !row.guild_id || row.guild_id === normalizedGuildId)
+    .sort((left, right) => auditTimestamp(right.created_at) - auditTimestamp(left.created_at));
+}
+
+function normalizeAuditLog(row, index = 0) {
+  const value = isObject(row) ? row : {};
+  return {
+    id: String(value.id ?? `audit-${index}`),
+    guild_id: String(value.guild_id ?? ""),
+    action: String(value.action ?? "dashboard.event"),
+    actor_discord_user_id: String(value.actor_discord_user_id ?? value.actor_id ?? value.user_id ?? ""),
+    actor_username: String(value.actor_username ?? value.username ?? value.actor_name ?? "不明なユーザー"),
+    actor_avatar_url: normalizeNullableString(value.actor_avatar_url ?? value.avatar_url),
+    before_json: normalizeAuditJson(value.before_json),
+    after_json: normalizeAuditJson(value.after_json),
+    created_at: value.created_at ?? value.timestamp ?? null,
+  };
+}
+
+function normalizeAuditJson(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function auditTimestamp(value) {
+  const timestamp = new Date(value ?? "").getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function shouldAttachGuardAuth(rawUrl) {
@@ -6022,7 +6408,19 @@ function applyGuardRiskSettingsForGuild(guildId) {
   rememberSavedGuardRiskForm(guardRiskFormFromSettings(guildId));
 }
 
+function syncGuardAuditGuildId(preferredGuildId = state.guard.auditGuildId) {
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  state.guard.auditGuildId = [
+    preferredGuildId,
+    state.guard.verificationForm.guild_id,
+    guilds[0]?.id,
+  ].find((guildId) => guildId && guildIds.has(guildId)) ?? "";
+  return state.guard.auditGuildId;
+}
+
 function applyGuardSettingsForGuild(guildId) {
+  state.guard.auditGuildId = String(guildId ?? "");
   applyGuardVerificationSettingsForGuild(guildId);
   applyGuardInvitationSettingsForGuild(guildId);
   applyGuardModerationSettingsForGuild(guildId);
@@ -6085,6 +6483,9 @@ function activeGuardFeature() {
 }
 
 function renderGuardFeatureContent(feature) {
+  if (feature?.id === "audit-log") {
+    return renderAuditLogPanel("guard");
+  }
   if (feature?.id === "admin") {
     return renderGuardHostAdminPanel();
   }
@@ -7025,6 +7426,9 @@ function guardRiskSelectedGuild() {
 
 function activeGuardSelectedGuild() {
   const featureId = activeGuardFeature().id;
+  if (featureId === "audit-log") {
+    return selectedAuditGuild("guard");
+  }
   if (featureId === "invitation") {
     return guardInvitationSelectedGuild();
   }
@@ -7237,6 +7641,7 @@ async function saveGuardVerificationSettings() {
       ...nextSettings,
     ];
     rememberSavedGuardVerificationForm(nextSettings[0] ?? form);
+    invalidateAuditLogs("guard", form.guild_id);
     clearPendingNavigation();
     const panel = payload?.panel;
     if (panel?.status === "published") {
@@ -7315,6 +7720,7 @@ async function saveGuardInvitationSettings() {
       ...nextSettings,
     ];
     rememberSavedGuardInvitationForm(nextSettings[0] ?? form);
+    invalidateAuditLogs("guard", form.guild_id);
     clearPendingNavigation();
     state.guard.invitationMessage = "招待リンク設定を保存しました。";
     saved = guardSessionIsCurrent(guardSession);
@@ -7508,6 +7914,7 @@ async function saveGuardModerationSettings() {
       ...nextSettings,
     ];
     rememberSavedGuardModerationForm(nextSettings[0] ?? form);
+    invalidateAuditLogs("guard", form.guild_id);
     clearPendingNavigation();
     state.guard.moderationMessage = "荒らし対策の設定を保存しました。";
     saved = guardSessionIsCurrent(guardSession);
@@ -7584,6 +7991,7 @@ async function saveGuardLoggingSettings() {
       ...nextSettings,
     ];
     rememberSavedGuardLoggingForm(nextSettings[0] ?? form);
+    invalidateAuditLogs("guard", form.guild_id);
     clearPendingNavigation();
     state.guard.loggingMessage = "ログ機能の設定を保存しました。";
     saved = guardSessionIsCurrent(guardSession);
@@ -7640,6 +8048,7 @@ async function saveGuardRiskSettings() {
       ...nextSettings,
     ];
     rememberSavedGuardRiskForm(nextSettings[0] ?? form);
+    invalidateAuditLogs("guard", form.guild_id);
     clearPendingNavigation();
     state.guard.riskMessage = "危険度判断の設定を保存しました。";
     saved = guardSessionIsCurrent(guardSession);
@@ -7684,8 +8093,252 @@ function guardText(value, fallback = "未取得") {
   return text || fallback;
 }
 
+function renderAuditLogPanel(productId) {
+  const product = normalizeAuditProduct(productId);
+  const guild = selectedAuditGuild(product);
+  if (!guild) {
+    return `
+      <section class="settings-panel empty-state" aria-label="変更ログ">
+        ${icon("history")}
+        <strong>サーバーを選択してください。</strong>
+        <span>管理権限があるサーバーを選ぶと、アクセスと設定変更の履歴を確認できます。</span>
+      </section>
+    `;
+  }
+
+  const audit = auditLogState(product);
+  const currentGuild = audit.guildId === guild.id;
+  const logs = currentGuild ? audit.logs : [];
+  const loading = currentGuild && audit.loading;
+  const error = currentGuild ? audit.error : null;
+  const loadedAt = currentGuild ? audit.loadedAt : null;
+  return `
+    <section class="settings-panel audit-log-panel" aria-label="${escapeAttribute(guild.name)}の変更ログ">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("history")}<h2>変更ログ</h2></div>
+        <div class="settings-panel__header-actions">
+          <span class="feature-status ${logs.length ? "feature-status--on" : ""}">${logs.length}件</span>
+          <button class="icon-button icon-button--ghost audit-log-refresh ${loading ? "audit-log-refresh--loading" : ""}" type="button" data-action="audit-log-refresh" data-audit-product="${escapeAttribute(product)}" ${loading ? "disabled" : ""}>
+            ${icon("refresh")}<span>${loading ? "更新中" : "再読み込み"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="audit-log-summary">
+        <span>${icon("server")}<strong>${escapeHtml(guild.name)}</strong></span>
+        <small>${loadedAt ? `最終更新 ${escapeHtml(formatDateTime(loadedAt))}` : "最新100件を表示します"}</small>
+      </div>
+      ${error ? `<div class="status-banner status-banner--error" role="alert">${icon("alert")}<span>${escapeHtml(error)}</span></div>` : ""}
+      ${loading && !logs.length ? renderAuditLogLoading() : ""}
+      ${!loading && !error && !logs.length ? `
+        <div class="empty-state audit-log-empty">
+          ${icon("history")}
+          <strong>変更ログはまだありません。</strong>
+          <span>ダッシュボードへのアクセスや設定の保存が行われると、ここに表示されます。</span>
+        </div>
+      ` : ""}
+      ${logs.length ? `<div class="audit-log-list" aria-live="polite">${logs.map(renderAuditLogRow).join("")}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderAuditLogLoading() {
+  return `
+    <div class="empty-state audit-log-loading" aria-live="polite">
+      ${icon("refresh")}
+      <strong>変更ログを読み込み中です。</strong>
+      <span>最新のアクセスと設定変更を取得しています。</span>
+    </div>
+  `;
+}
+
+function renderAuditLogRow(log) {
+  const username = String(log.actor_username || "不明なユーザー");
+  const userId = String(log.actor_discord_user_id || "未取得");
+  const actionLabel = auditActionLabel(log.action);
+  const actionTone = String(log.action).includes("access") ? "access" : "change";
+  const createdAt = log.created_at ? String(log.created_at) : "";
+  return `
+    <article class="audit-log-row">
+      <div class="audit-log-row__actor">
+        ${
+          log.actor_avatar_url
+            ? `<img class="audit-log-row__avatar" src="${escapeAttribute(log.actor_avatar_url)}" alt="" loading="lazy" />`
+            : `<span class="audit-log-row__avatar audit-log-row__avatar--fallback">${escapeHtml(username.slice(0, 1) || "?")}</span>`
+        }
+        <div class="audit-log-row__identity">
+          <strong>${escapeHtml(username)}</strong>
+          <code>ユーザーID ${escapeHtml(userId)}</code>
+        </div>
+      </div>
+      <div class="audit-log-row__content">
+        <strong class="audit-log-row__content-label">変更内容</strong>
+        ${renderAuditLogDetails(log, actionLabel)}
+      </div>
+      <div class="audit-log-row__meta">
+        <span class="audit-log-action audit-log-action--${actionTone}">${escapeHtml(actionLabel)}</span>
+        <time ${createdAt ? `datetime="${escapeAttribute(createdAt)}"` : ""}>${escapeHtml(formatDateTime(log.created_at))}</time>
+      </div>
+    </article>
+  `;
+}
+
+function renderAuditLogDetails(log, actionLabel) {
+  const result = auditLogChanges(log.before_json, log.after_json);
+  if (!result.changes.length) {
+    const message = String(log.action).includes("access")
+      ? "このサーバーのダッシュボードを開きました。"
+      : `${actionLabel}を行いました。設定値の差分はありません。`;
+    return `<p class="audit-log-row__description">${escapeHtml(message)}</p>`;
+  }
+  return `
+    <ul class="audit-log-diff-list">
+      ${result.changes.map(renderAuditLogChange).join("")}
+      ${result.omitted > 0 ? `<li class="audit-log-diff-list__more">ほか ${result.omitted} 件の変更</li>` : ""}
+    </ul>
+  `;
+}
+
+function renderAuditLogChange(change) {
+  return `
+    <li>
+      <strong>${escapeHtml(auditFieldLabel(change.path))}</strong>
+      <span class="audit-log-diff-value ${change.beforeMissing ? "audit-log-diff-value--empty" : ""}">${escapeHtml(change.beforeMissing ? "未設定" : formatAuditValue(change.before))}</span>
+      <span class="audit-log-diff-arrow" aria-hidden="true">→</span>
+      <span class="audit-log-diff-value ${change.afterMissing ? "audit-log-diff-value--empty" : ""}">${escapeHtml(change.afterMissing ? "未設定" : formatAuditValue(change.after))}</span>
+    </li>
+  `;
+}
+
+function auditLogChanges(beforeValue, afterValue) {
+  const before = new Map();
+  const after = new Map();
+  if (beforeValue !== null && beforeValue !== undefined) {
+    flattenAuditValue(beforeValue, "", before);
+  }
+  if (afterValue !== null && afterValue !== undefined) {
+    flattenAuditValue(afterValue, "", after);
+  }
+  const paths = [...new Set([...before.keys(), ...after.keys()])].sort((left, right) => left.localeCompare(right, "ja"));
+  const allChanges = paths
+    .filter((path) => !auditValuesEqual(before.get(path), after.get(path)) || before.has(path) !== after.has(path))
+    .map((path) => ({
+      path,
+      before: before.get(path),
+      after: after.get(path),
+      beforeMissing: !before.has(path),
+      afterMissing: !after.has(path),
+    }));
+  const changes = allChanges.slice(0, 40);
+  return { changes, omitted: allChanges.length - changes.length };
+}
+
+function flattenAuditValue(value, path, output, depth = 0) {
+  if (isObject(value) && !Array.isArray(value) && depth < 5) {
+    const keys = Object.keys(value).filter((key) => !AUDIT_IGNORED_FIELDS.has(key));
+    if (keys.length) {
+      keys.forEach((key) => {
+        const nextPath = path ? `${path}.${key}` : key;
+        flattenAuditValue(value[key], nextPath, output, depth + 1);
+      });
+      return;
+    }
+  }
+  output.set(path || "value", value);
+}
+
+function auditValuesEqual(left, right) {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+function auditActionLabel(action) {
+  const normalized = String(action ?? "").trim().toLowerCase();
+  if (AUDIT_ACTION_LABELS[normalized]) {
+    return AUDIT_ACTION_LABELS[normalized];
+  }
+  const tokenLabels = {
+    dashboard: "ダッシュボード",
+    access: "アクセス",
+    guild: "サーバー",
+    settings: "設定",
+    features: "機能設定",
+    guard: "Guard",
+    verification: "認証",
+    invitation: "招待リンク",
+    moderation: "荒らし対策",
+    logging: "ログ機能",
+    risk: "危険度判断",
+    update: "保存",
+    saved: "保存",
+  };
+  const labels = normalized.split(/[._-]+/).filter(Boolean).map((token) => tokenLabels[token] ?? token);
+  return labels.length ? labels.join(" / ") : "ダッシュボード操作";
+}
+
+function auditFieldLabel(path) {
+  const segments = String(path || "value").split(".").filter(Boolean);
+  return segments.map((segment) => auditFieldSegmentLabel(segment)).join(" / ");
+}
+
+function auditFieldSegmentLabel(segment) {
+  if (AUDIT_FIELD_LABELS[segment]) {
+    return AUDIT_FIELD_LABELS[segment];
+  }
+  const moderationFeature = GUARD_MODERATION_FEATURES.find((feature) => feature.id === segment);
+  if (moderationFeature) {
+    return moderationFeature.label;
+  }
+  const loggingEvent = GUARD_LOGGING_EVENTS.find((event) => event.id === segment);
+  if (loggingEvent) {
+    return loggingEvent.label;
+  }
+  return String(segment).replace(/[_-]+/g, " ");
+}
+
+function formatAuditValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "未設定";
+  }
+  if (typeof value === "boolean") {
+    return value ? "有効" : "無効";
+  }
+  if (typeof value === "string") {
+    return AUDIT_VALUE_LABELS[value.toLowerCase()] ?? value;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return "なし";
+    }
+    if (value.every((item) => ["string", "number", "boolean"].includes(typeof item))) {
+      return value.map((item) => formatAuditValue(item)).join("、");
+    }
+    return `${value.length}件: ${safeAuditJson(value)}`;
+  }
+  if (isObject(value)) {
+    return safeAuditJson(value);
+  }
+  return String(value);
+}
+
+function safeAuditJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function renderWorkspaceContent() {
   const view = activeSettingsView();
+  if (view === "audit") {
+    return renderAuditLogPanel("one");
+  }
   if (view === "user") {
     return renderUserPage();
   }
@@ -10466,12 +11119,15 @@ async function completePendingNavigation(pending) {
   if (pending.type === "guard-feature") {
     state.guard.activeFeature = pending.featureId;
     render();
+    loadActiveGuardFeatureData();
     return;
   }
   if (pending.type === "guard-guild") {
     applyGuardSettingsForGuild(pending.guildId);
     state.guildListCollapsed = true;
     render();
+    void ensureDashboardAccessLogged("guard", pending.guildId);
+    loadActiveGuardFeatureData();
   }
 }
 
@@ -10516,6 +11172,7 @@ function requestGuardFeatureChange(featureId) {
   state.guard.activeFeature = featureId;
   clearPendingNavigation();
   render();
+  loadActiveGuardFeatureData();
 }
 
 function requestGuardGuildChange(guildId) {
@@ -10535,6 +11192,18 @@ function requestGuardGuildChange(guildId) {
   state.guildListCollapsed = true;
   clearPendingNavigation();
   render();
+  void ensureDashboardAccessLogged("guard", guildId);
+  loadActiveGuardFeatureData();
+}
+
+function loadActiveGuardFeatureData() {
+  if (state.activeProduct !== "guard" || activeGuardFeature().id !== "audit-log") {
+    return;
+  }
+  const guildId = selectedAuditGuildId("guard");
+  if (guildId) {
+    void loadAuditLogs("guard", guildId);
+  }
 }
 
 function guildDataForActiveViewMissing() {
@@ -10566,7 +11235,11 @@ function guildRankingsForActiveViewMissing() {
 }
 
 function loadActivePageData() {
-  if (activeSettingsView() === "host") {
+  if (activeSettingsView() === "audit") {
+    if (state.selectedGuildId) {
+      void loadAuditLogs("one", state.selectedGuildId);
+    }
+  } else if (activeSettingsView() === "host") {
     void loadHostAdminData();
   } else if (activeSettingsView() === "user") {
     void loadPlaylist({ silent: true });
@@ -10582,6 +11255,9 @@ function loadActivePageData() {
 async function saveActiveSettings() {
   if (state.activeProduct === "guard") {
     const featureId = activeGuardFeature().id;
+    if (featureId === "audit-log" || featureId === "admin") {
+      return true;
+    }
     if (featureId === "invitation") {
       return saveGuardInvitationSettings();
     }
@@ -10824,6 +11500,12 @@ function handleClick(event) {
       void loadUserActivity();
     } else if (action === "guild-ranking-refresh") {
       void loadGuildRankings();
+    } else if (action === "audit-log-refresh") {
+      const product = normalizeAuditProduct(actionEl.dataset.auditProduct ?? state.activeProduct);
+      const guildId = selectedAuditGuildId(product);
+      if (guildId) {
+        void loadAuditLogs(product, guildId, { force: true });
+      }
     } else if (action === "playlist-add-url") {
       void submitPlaylistInput();
     } else if (action === "playlist-add-search-result") {
@@ -10996,7 +11678,12 @@ function handleClick(event) {
     if (guildId && guildId !== state.selectedGuildId) {
       state.selectedGuildId = guildId;
       state.guildListCollapsed = true;
-      void loadGuildData(guildId);
+      void ensureDashboardAccessLogged("one", guildId);
+      if (activeSettingsView() === "audit") {
+        void loadAuditLogs("one", guildId);
+      } else {
+        void loadGuildData(guildId);
+      }
     }
     return;
   }
