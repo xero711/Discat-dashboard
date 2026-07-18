@@ -9,7 +9,6 @@ const ONE_API_BASE_STORAGE_KEY = "discat_one_api_base";
 const GUARD_API_BASE_STORAGE_KEY = "discat_guard_api_base";
 const GUARD_DEFAULT_API_BASE_URL = "http://127.0.0.1:8788";
 const GUARD_PUBLIC_API_BASE_URL = "https://guard-api.xero-x.me";
-const GUARD_STATUS_SAMPLE_ENDPOINT = "./guard-status.sample.json";
 const GUARD_DISCORD_CLIENT_ID = "1503177107910561954";
 const GUARD_BOT_PERMISSIONS = "4785635568372983";
 const AUTH_TOKEN_STORAGE_KEY = "discat_one_session_token";
@@ -20,6 +19,12 @@ const SERVICE_STATUS_TIMEOUT_MS = 10000;
 const SERVICE_STATUS_REFRESH_INTERVAL_MS = 30000;
 const GUARD_STATUS_REFRESH_INTERVAL_MS = 10000;
 const GUARD_STATUS_FAILURE_THRESHOLD = 3;
+const API_READ_RETRY_DELAYS_MS = [0, 450, 1200];
+const GUARD_RECONNECT_DELAYS_MS = [1200, 3000, 7000];
+const GUARD_OPERATION_POLL_INITIAL_MS = 750;
+const GUARD_OPERATION_POLL_MAX_MS = 1000;
+const GUARD_OPERATION_TIMEOUT_MS = 55000;
+const GUARD_PANEL_SUCCESS_STATUSES = new Set(["published", "disabled", "unchanged"]);
 const GUILD_OPTIONS_REFRESH_INTERVAL_MS = 60000;
 const HOST_REFRESH_INTERVAL_MS = 5000;
 const TRANSIENT_LOADING_DELAY_MS = 280;
@@ -69,7 +74,7 @@ const AUDIT_FIELD_LABELS = {
   role_id: "ロール",
   duplicate_action: "同一端末検知時の処置",
   restricted_guild_check_enabled: "荒らしサーバー参加チェック",
-  dm_warning_enabled: "DM警告",
+  dm_warning_enabled: "オーナーDM通知",
   features: "機能",
   events: "イベント",
   action: "処置",
@@ -362,8 +367,8 @@ const GUARD_FEATURES = [
   {
     id: "invitation",
     label: "招待リンク",
-    description: "新しく作成された招待リンクをすぐに無効化し、作成者へのDM警告を設定します。",
-    help: "招待リンクの自動無効化と、リンク作成者へのDM警告をサーバーごとに設定します。",
+    description: "新しく作成された招待リンクをすぐに無効化し、成功時にサーバーオーナーへ通知します。",
+    help: "招待リンクの自動無効化と、無効化成功時のサーバーオーナーへのDM通知を設定します。",
     icon: "link",
   },
   {
@@ -678,10 +683,17 @@ const GUARD_LOGGING_DEFAULTS = Object.fromEntries(
 );
 
 class ApiError extends Error {
-  constructor(status, message, requestId) {
-    super(message);
+  constructor(status, message, requestId, code = "") {
+    const resolvedCode = String(code || (status ? `HTTP_${status}` : "NETWORK_ERROR"));
+    const metadata = [
+      `エラーコード: ${resolvedCode}`,
+      requestId ? `Request ID: ${requestId}` : "",
+    ].filter(Boolean);
+    super(metadata.length ? `${message}（${metadata.join(" / ")}）` : message);
     this.status = status;
     this.requestId = requestId;
+    this.code = resolvedCode;
+    this.userMessage = message;
   }
 }
 
@@ -711,6 +723,7 @@ function createAuditLogState(requestId = 0) {
 }
 
 const state = {
+  browserOnline: navigator.onLine,
   activeProduct: readInitialProduct(),
   productTransition: null,
   user: null,
@@ -792,6 +805,7 @@ const state = {
   saving: false,
   ticketPanelPublishing: false,
   message: null,
+  operationNotice: null,
   guildDataError: null,
   dirtyViews: {
     tts: false,
@@ -816,6 +830,14 @@ const state = {
     statusRequestId: 0,
     statusFailureCount: 0,
     statusLastSuccessAt: null,
+    reconnectAttempt: 0,
+    reconnectAt: null,
+    publicStatus: {
+      loading: true,
+      online: null,
+      checkedAt: null,
+      error: null,
+    },
     mutationGeneration: 0,
     hasLoadedApiSettings: false,
     loadedAt: null,
@@ -903,6 +925,7 @@ const state = {
     rankings: 0,
     guard: 0,
     guardSession: 0,
+    guardPublicStatus: 0,
     guildOptions: 0,
     ticketPanel: 0,
   },
@@ -916,6 +939,8 @@ let guardStatusRefreshTimerId = null;
 let guildOptionsRefreshTimerId = null;
 let guildOptionsRefreshInFlight = false;
 let guildOptionsRenderPending = false;
+let guardDataLoadPromise = null;
+let guardDataRetryTimerId = null;
 const dashboardAccessRequests = new Map();
 const dashboardAccessLoggedInMemory = new Set();
 let turnstileScriptPromise = null;
@@ -951,11 +976,14 @@ root.addEventListener("focusout", handleDeferredRenderFocusOut);
 });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    cancelGuardReconnect();
     return;
   }
   if (state.activeProduct === "guard") {
     if (state.user && getAuthToken()) {
-      void loadGuardStatus();
+      void ensureGuardDashboardReady({ reason: "visibility" });
+    } else {
+      void loadGuardPublicStatus({ silent: true });
     }
     return;
   }
@@ -966,6 +994,9 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("storage", handleAuthTokenStorageChange);
+window.addEventListener("online", handleBrowserOnline);
+window.addEventListener("offline", handleBrowserOffline);
+window.addEventListener("beforeunload", handleBeforeUnload);
 document.addEventListener("keydown", handleKeydown);
 document.addEventListener("pointerdown", handleDocumentPointerDown, true);
 turnstileCompactMediaQuery.addEventListener("change", handleTurnstileViewportChange);
@@ -1232,6 +1263,9 @@ async function activateProductPage(productId, options = {}) {
   }
   stopOneAutoRefresh();
   stopGuardAutoRefresh();
+  if (previousProduct === "guard") {
+    cancelGuardReconnect({ resetAttempts: true });
+  }
   if (nextProduct === "guard") {
     state.security.loading = true;
     state.security.error = null;
@@ -1304,7 +1338,10 @@ async function loadGuardDashboardData() {
   const token = getAuthToken();
   if (!token) {
     resetGuardAuthenticatedState();
-    await loadTurnstileConfig({ silent: true, renderAfter: false });
+    await Promise.all([
+      loadTurnstileConfig({ silent: true, renderAfter: false }),
+      loadGuardPublicStatus({ silent: true, renderAfter: false }),
+    ]);
     render();
     return;
   }
@@ -1319,7 +1356,7 @@ async function loadGuardDashboardData() {
     return;
   }
 
-  if (state.guard.loadedAt) {
+  if (state.guard.loadedAt && state.guard.source === "api" && state.guard.hasLoadedApiSettings) {
     syncGuardAuditGuildId();
     const guildId = selectedAuditGuildId("guard");
     if (guildId) {
@@ -1335,7 +1372,7 @@ async function loadGuardDashboardData() {
   }
 
   render();
-  await loadGuardData({ silent: true, renderAfter: false });
+  await ensureGuardDashboardReady({ reason: "initial", silent: true, renderAfter: false });
   hydrateGuardVerificationForm();
   hydrateGuardModerationForm();
   syncGuardAuditGuildId();
@@ -1467,6 +1504,43 @@ function handleAuthTokenStorageChange(event) {
   }
   clearTurnstileProofToken();
   resetSessionState();
+  if (getAuthToken()) {
+    state.authChecking = true;
+    render();
+    void loadActiveProductDashboardData();
+  }
+}
+
+function loadActiveProductDashboardData() {
+  return state.activeProduct === "guard" ? loadGuardDashboardData() : loadOneDashboardData();
+}
+
+function handleBrowserOnline() {
+  state.browserOnline = true;
+  if (state.activeProduct === "guard") {
+    if (state.user && getAuthToken()) {
+      void retryGuardConnection({ manual: false });
+    } else {
+      void loadGuardPublicStatus();
+    }
+  } else {
+    void loadServiceStatus({ silent: false });
+  }
+  render();
+}
+
+function handleBrowserOffline() {
+  state.browserOnline = false;
+  cancelGuardReconnect();
+  render();
+}
+
+function handleBeforeUnload(event) {
+  if (!hasUnsavedChanges()) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = "";
 }
 
 function readLocalStorageToken() {
@@ -1570,6 +1644,74 @@ function cookiePath() {
   return slashIndex >= 0 ? path.slice(0, slashIndex + 1) || "/" : "/";
 }
 
+function waitForRetry(delayMs) {
+  return delayMs > 0
+    ? new Promise((resolve) => window.setTimeout(resolve, delayMs))
+    : Promise.resolve();
+}
+
+function requestMethod(init = {}) {
+  return String(init.method ?? "GET").toUpperCase();
+}
+
+async function fetchWithResilience(url, init = {}, options = {}) {
+  const readOnly = ["GET", "HEAD"].includes(requestMethod(init));
+  const retryDelays = readOnly && options.readRetries !== false ? API_READ_RETRY_DELAYS_MS : [0];
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    await waitForRetry(retryDelays[attempt]);
+    if (!navigator.onLine) {
+      throw new ApiError(
+        0,
+        "インターネット接続がオフラインです。接続が戻ると自動で再確認します。",
+        undefined,
+        "BROWSER_OFFLINE",
+      );
+    }
+    const controller = new AbortController();
+    const externalSignal = init.signal;
+    const handleExternalAbort = () => controller.abort();
+    if (externalSignal?.aborted) {
+      controller.abort();
+    } else {
+      externalSignal?.addEventListener("abort", handleExternalAbort, { once: true });
+    }
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      if (readOnly && [502, 503, 504].includes(response.status) && attempt < retryDelays.length - 1) {
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      const timedOut = error instanceof DOMException && error.name === "AbortError";
+      if (!timedOut && attempt < retryDelays.length - 1) {
+        continue;
+      }
+      break;
+    } finally {
+      window.clearTimeout(timeoutId);
+      externalSignal?.removeEventListener("abort", handleExternalAbort);
+    }
+  }
+
+  const timedOut = lastError instanceof DOMException && lastError.name === "AbortError";
+  throw new ApiError(
+    0,
+    timedOut
+      ? "APIの応答がタイムアウトしました。接続状態とサービスの起動状態を確認してください。"
+      : "APIに接続できませんでした。接続が戻ると自動で再確認します。",
+    undefined,
+    timedOut ? "REQUEST_TIMEOUT" : "NETWORK_UNREACHABLE",
+  );
+}
+
 async function request(path, init = {}, options = {}) {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) {
@@ -1586,27 +1728,19 @@ async function request(path, init = {}, options = {}) {
     trustedApiBase && token && headers.get("Authorization") === `Bearer ${token}`,
   );
 
-  const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetchWithResilience(`${API_BASE_URL}${path}`, {
       ...init,
       headers,
       credentials: "omit",
-      signal: controller.signal,
-    });
+    }, { timeoutMs });
   } catch (error) {
-    const aborted = error instanceof DOMException && error.name === "AbortError";
-    throw new ApiError(
-      0,
-      aborted
-        ? "APIの応答がタイムアウトしました。BotとAPIの起動状態を確認してください。"
-        : "APIに接続できませんでした。Botと公開URLを確認してください。",
-    );
-  } finally {
-    window.clearTimeout(timeoutId);
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    throw new ApiError(0, "APIに接続できませんでした。", undefined, "NETWORK_UNREACHABLE");
   }
 
   if (response.status === 204) {
@@ -1622,7 +1756,12 @@ async function request(path, init = {}, options = {}) {
       clearAuthToken();
       resetSessionState();
     }
-    throw new ApiError(response.status, apiErrorMessage(response.status, payload), requestId);
+    throw new ApiError(
+      response.status,
+      apiErrorMessage(response.status, payload),
+      requestId,
+      apiErrorCode(response.status, payload),
+    );
   }
 
   return payload;
@@ -2876,18 +3015,36 @@ function syncGuildOptionsAutoRefresh() {
 function shouldAutoRefreshGuardStatus() {
   return Boolean(
     state.activeProduct === "guard" &&
-      state.user &&
-      getAuthToken() &&
+      guardNetworkAvailable() &&
       !document.hidden,
   );
+}
+
+function guardNetworkAvailable() {
+  return state.browserOnline && navigator.onLine !== false;
+}
+
+function apiErrorCode(status, payload) {
+  if (isObject(payload)) {
+    const candidate = payload.error_code ?? payload.code ?? payload.error;
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim().toUpperCase().replace(/[^A-Z0-9_.-]+/g, "_").slice(0, 80);
+    }
+  }
+  return `HTTP_${status}`;
 }
 
 function syncGuardStatusRefresh() {
   if (shouldAutoRefreshGuardStatus()) {
     if (!guardStatusRefreshTimerId) {
       guardStatusRefreshTimerId = window.setInterval(() => {
-        if (!state.guard.loading && shouldAutoRefreshGuardStatus()) {
-          void loadGuardStatus();
+        if (state.guard.loading || !shouldAutoRefreshGuardStatus()) {
+          return;
+        }
+        if (state.user && getAuthToken()) {
+          void ensureGuardDashboardReady({ reason: "interval", silent: true });
+        } else if (!state.guard.publicStatus.loading) {
+          void loadGuardPublicStatus({ silent: true });
         }
       }, GUARD_STATUS_REFRESH_INTERVAL_MS);
     }
@@ -3356,6 +3513,7 @@ function resetDirtyViews() {
     tts: false,
     features: false,
     guardVerification: false,
+    guardInvitation: false,
     guardModeration: false,
     guardLogging: false,
     guardRisk: false,
@@ -3708,6 +3866,7 @@ async function savePatch(patch, applyUpdatedSettings = rememberSavedSettings) {
   state.requestIds.save = requestId;
   state.saving = true;
   state.message = null;
+  state.operationNotice = null;
   render();
 
   let saved = false;
@@ -3717,6 +3876,7 @@ async function savePatch(patch, applyUpdatedSettings = rememberSavedSettings) {
       applyUpdatedSettings(updated);
       invalidateAuditLogs("one", state.selectedGuildId);
       clearPendingNavigation();
+      state.operationNotice = { tone: "success", title: "✅ 保存しました", message: "設定がBotへ反映されました。" };
       saved = true;
     }
   } catch (error) {
@@ -3775,6 +3935,7 @@ async function saveFeatureSettings() {
   state.requestIds.save = requestId;
   state.saving = true;
   state.message = null;
+  state.operationNotice = null;
   render();
 
   let saved = false;
@@ -3784,6 +3945,7 @@ async function saveFeatureSettings() {
       rememberSavedFeatureSettings(updated);
       invalidateAuditLogs("one", state.selectedGuildId);
       clearPendingNavigation();
+      state.operationNotice = { tone: "success", title: "✅ 保存しました", message: "サーバー機能の設定を反映しました。" };
       saved = true;
       if (state.selectedGuildId && ["bump-rank", "server-rank"].includes(activeSettingsPage().id)) {
         void loadGuildRankings(state.selectedGuildId, { silent: true });
@@ -3825,6 +3987,7 @@ async function publishTicketPanel() {
   state.requestIds.ticketPanel = requestId;
   state.ticketPanelPublishing = true;
   state.message = null;
+  state.operationNotice = null;
   render();
 
   try {
@@ -3838,9 +4001,13 @@ async function publishTicketPanel() {
     }
     rememberSavedFeatureSettings(refreshed);
     invalidateAuditLogs("one", state.selectedGuildId);
-    state.message = result?.panel_url
-      ? `チケットパネルを送信しました: ${result.panel_url}`
-      : "チケットパネルを送信しました。";
+    state.operationNotice = {
+      tone: "success",
+      title: "📨 送信しました",
+      message: result?.panel_url
+        ? `チケットパネルを送信しました: ${result.panel_url}`
+        : "チケットパネルを送信しました。",
+    };
     return true;
   } catch (error) {
     if (requestId === state.requestIds.ticketPanel) {
@@ -4226,7 +4393,10 @@ function handleTurnstileViewportChange() {
 function resetGuardAuthenticatedState() {
   state.requestIds.guard += 1;
   state.requestIds.guardSession += 1;
+  state.requestIds.guardPublicStatus += 1;
   stopGuardAutoRefresh();
+  cancelGuardReconnect();
+  guardDataLoadPromise = null;
   state.guard.apiError = null;
   state.guard.health = null;
   state.guard.events = [];
@@ -4236,6 +4406,14 @@ function resetGuardAuthenticatedState() {
   state.guard.statusRequestId += 1;
   state.guard.statusFailureCount = 0;
   state.guard.statusLastSuccessAt = null;
+  state.guard.reconnectAttempt = 0;
+  state.guard.reconnectAt = null;
+  state.guard.publicStatus = {
+    loading: true,
+    online: null,
+    checkedAt: null,
+    error: null,
+  };
   state.guard.mutationGeneration = 0;
   state.guard.hasLoadedApiSettings = false;
   state.guard.loadedAt = null;
@@ -4340,6 +4518,7 @@ function resetSessionState() {
   state.ttsOptions = null;
   state.guildDataError = null;
   state.ticketPanelPublishing = false;
+  state.operationNotice = null;
   state.hostStatus = null;
   state.hostLogs = [];
   state.hostError = null;
@@ -4992,13 +5171,16 @@ function renderMainContent(loadingContext = null) {
     }
     return renderGuardDashboard();
   }
+  if (!state.user || !getAuthToken()) {
+    return renderLoginPanel();
+  }
   if (serviceUnavailableActive()) {
     return renderServiceStatusPanel("unavailable");
   }
   if (serviceMaintenanceActive()) {
     return renderServiceStatusPanel("maintenance");
   }
-  return state.user && getAuthToken() ? renderDashboard() : renderLoginPanel();
+  return renderDashboard();
 }
 
 function serviceStatusOnlyActive() {
@@ -5143,36 +5325,98 @@ function renderLoginPanel() {
   const guardProduct = state.activeProduct === "guard";
   const securityEnabled = state.security.enabled || state.security.loading || state.security.error;
   const title = state.security.enabled && !state.security.verified
-    ? "セキュリティ検証の実行"
-    : guardProduct
-      ? "Guardへのログインが必要です"
-      : "ログインが必要です";
+    ? "安全を確認して、管理を始めましょう"
+    : "2つのDiscatを、ひとつの場所で。";
   const copy = state.security.enabled
     ? "Cloudflare Turnstileでアクセス元を確認してから、Discordログインへ進みます。"
     : guardProduct
-      ? "Discordアカウントでログインすると、管理権限を持つサーバーのGuard設定を管理できます。"
-      : "Discordアカウントでログインすると、参加中のサーバーとBOTの設定を管理できます。";
+      ? "Guardで認証・監査・荒らし対策を確認できます。管理権限を持つDiscordアカウントでログインしてください。"
+      : "Oneで読み上げ・音楽・サーバー機能をまとめて設定できます。Discordアカウントでログインしてください。";
   const loginState = guardProduct ? guardLoginButtonState() : loginButtonState();
-  const mascotUrl = guardProduct ? GUARD_MASCOT_URL : MASCOT_URL;
   return `
-    <section class="login-panel" data-login-product="${guardProduct ? "guard" : "one"}">
+    <section class="login-panel guest-portal" data-login-product="${guardProduct ? "guard" : "one"}" aria-labelledby="guest-portal-title">
       <div class="login-panel__copy">
-        <h2>${escapeHtml(title)}</h2>
-        <p>${escapeHtml(copy)}</p>
+        <span class="guest-portal__eyebrow">✦ DISCAT CONTROL CENTER</span>
+        <h2 id="guest-portal-title">${escapeHtml(title)}</h2>
+        <p id="guest-portal-description">${escapeHtml(copy)}</p>
+        <div class="guest-product-chooser" role="group" aria-label="ログイン先を選択">
+          <button class="guest-product-card ${guardProduct ? "" : "guest-product-card--active"}" type="button" aria-pressed="${guardProduct ? "false" : "true"}" data-action="switch-product" data-product="one">
+            <img src="${escapeAttribute(MASCOT_URL)}" alt="" />
+            <span><strong>Discat One</strong><small>🎙️ 読み上げ・音楽・サーバー管理</small></span>
+            ${icon(guardProduct ? "chevronRight" : "success")}
+          </button>
+          <button class="guest-product-card ${guardProduct ? "guest-product-card--active" : ""}" type="button" aria-pressed="${guardProduct ? "true" : "false"}" data-action="switch-product" data-product="guard">
+            <img src="${escapeAttribute(GUARD_MASCOT_URL)}" alt="" />
+            <span><strong>Discat Guard</strong><small>🛡️ 認証・監査・荒らし対策</small></span>
+            ${icon(guardProduct ? "success" : "chevronRight")}
+          </button>
+        </div>
+        ${renderGuestConnectionBadge()}
         ${securityEnabled ? renderSecurityVerification() : ""}
         <div class="login-panel__actions">
           <button class="icon-button icon-button--primary" type="button" data-action="login" ${currentLoginBlocked() ? "disabled" : ""}>
-            ${icon(loginState.icon)}<span>${loginState.label}</span>
+            ${icon(loginState.icon)}<span>${loginState.label}</span><small>${guardProduct ? "Guardを管理" : "Oneを管理"}</small>
           </button>
           <a class="icon-button icon-button--ghost" href="${SUPPORT_SERVER_URL}" target="_blank" rel="noreferrer">
-            ${icon("external")}<span>サポートサーバーはこちらから</span>
+            ${icon("external")}<span>困ったときはサポートへ</span>
           </a>
         </div>
       </div>
-      <div class="login-panel__mascot" aria-hidden="true">
-        <img src="${escapeAttribute(mascotUrl)}" alt="" />
+      <div class="login-panel__mascot login-panel__mascot--duo" aria-label="Discat OneとDiscat Guardのマスコット">
+        <figure class="guest-mascot guest-mascot--one ${guardProduct ? "" : "guest-mascot--active"}">
+          <img src="${escapeAttribute(MASCOT_URL)}" alt="Discat One マスコット" />
+          <figcaption>CREATE · CONNECT</figcaption>
+        </figure>
+        <figure class="guest-mascot guest-mascot--guard ${guardProduct ? "guest-mascot--active" : ""}">
+          <img src="${escapeAttribute(GUARD_MASCOT_URL)}" alt="Discat Guard マスコット" />
+          <figcaption>PROTECT · OBSERVE</figcaption>
+        </figure>
       </div>
     </section>
+  `;
+}
+
+function renderGuestConnectionBadge() {
+  if (!state.browserOnline) {
+    return `
+      <div class="guest-connection guest-connection--error" role="status">
+        <span class="guest-connection__signal" aria-hidden="true">●</span>
+        <span><strong>オフラインです</strong><small>接続が戻ると自動で再確認します</small></span>
+      </div>
+    `;
+  }
+  if (state.activeProduct === "guard") {
+    const status = state.guard.publicStatus;
+    const tone = status.loading ? "checking" : status.online ? "online" : "error";
+    const title = status.loading ? "Guardの接続を確認中" : status.online ? "Guardは稼働中です" : "Guardへ接続できません";
+    const detail = status.loading
+      ? "少しだけお待ちください"
+      : status.online
+        ? `最終確認 ${formatTimeOnly(status.checkedAt)}`
+        : status.error || "再確認をお試しください";
+    return `
+      <div class="guest-connection guest-connection--${tone}" role="status">
+        <span class="guest-connection__signal" aria-hidden="true">●</span>
+        <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></span>
+        ${status.loading ? "" : `<button type="button" data-action="refresh-guard-status">${icon("refresh")}<span>再確認</span></button>`}
+      </div>
+    `;
+  }
+  const status = state.serviceStatus;
+  const online = status.apiOnline && status.botOnline && !status.botStale && !status.maintenance;
+  const tone = status.loading ? "checking" : online ? "online" : "error";
+  const title = status.loading ? "Oneの接続を確認中" : online ? "Oneは稼働中です" : "Oneは現在準備中です";
+  const detail = status.loading
+    ? "APIとBotを確認しています"
+    : online
+      ? `最終確認 ${formatTimeOnly(status.checkedAt)}`
+      : status.error || "状態を再確認してください";
+  return `
+    <div class="guest-connection guest-connection--${tone}" role="status">
+      <span class="guest-connection__signal" aria-hidden="true">●</span>
+      <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></span>
+      ${status.loading ? "" : `<button type="button" data-action="refresh-service-status">${icon("refresh")}<span>再確認</span></button>`}
+    </div>
   `;
 }
 
@@ -5230,22 +5474,36 @@ function renderServiceStatusPanel(mode) {
   const unavailable = mode === "unavailable";
   const guardProduct = state.activeProduct === "guard";
   const retrying = guardProduct && state.guard.loading;
-  const title = checking ? "接続確認中" : unavailable ? "API接続エラー" : "BOT状態未更新";
-  const message = checking
-    ? "APIとBOTの状態を確認しています。"
-    : unavailable
-      ? "BOTが起動中でも、APIが落ちているとダッシュボードは使えません。APIを起動して再チェックしてください。"
-      : "BOTのステータス更新が止まっています。BOTを再起動するか、APIと同じデータフォルダを見ているか確認してください。";
+  const reconnectPending = guardProduct && Boolean(state.guard.reconnectAt);
+  const title = guardProduct
+    ? checking
+      ? "Guardへの接続を確認中"
+      : "Guardへ接続できません"
+    : checking
+      ? "接続確認中"
+      : unavailable
+        ? "API接続エラー"
+        : "BOT状態未更新";
+  const message = guardProduct
+    ? reconnectPending
+      ? `一時的な通信エラーを検知しました。自動再接続を実行します（${state.guard.reconnectAttempt}/${GUARD_RECONNECT_DELAYS_MS.length}）。`
+      : "通信状態、Guard API、Botの順に確認してください。再チェックすると設定を最初から安全に読み直します。"
+    : checking
+      ? "APIとBOTの状態を確認しています。"
+      : unavailable
+        ? "BOTが起動中でも、APIが落ちているとダッシュボードは使えません。APIを起動して再チェックしてください。"
+        : "BOTのステータス更新が止まっています。BOTを再起動するか、APIと同じデータフォルダを見ているか確認してください。";
   return `
     <section class="service-status-panel service-status-panel--${checking ? "checking" : unavailable ? "unavailable" : "maintenance"}" data-service-status>
       <div class="service-status-panel__copy">
-        <div class="service-status-panel__eyebrow">${icon(unavailable ? "alert" : "radio")}<span>${checking ? "確認中" : unavailable ? "API停止" : "BOT確認待ち"}</span></div>
+        <div class="service-status-panel__eyebrow">${icon(unavailable || guardProduct ? "alert" : "radio")}<span>${checking ? "確認中" : guardProduct ? "再接続待ち" : unavailable ? "API停止" : "BOT確認待ち"}</span></div>
         <h2>${title}</h2>
         <p>${escapeHtml(message)}</p>
+        ${guardProduct && state.guard.apiError ? `<div class="service-status-panel__notice">${icon("info")}<span>${escapeHtml(state.guard.apiError)}</span></div>` : ""}
         ${
           checking
             ? ""
-            : `<button class="icon-button icon-button--primary" type="button" data-action="${guardProduct ? "refresh-guard-status" : "refresh-service-status"}" ${retrying ? "disabled" : ""}>${icon("refresh")}<span>${retrying ? "再確認中" : "再チェック"}</span></button>`
+            : `<button class="icon-button icon-button--primary" type="button" data-action="${guardProduct ? "refresh-guard-status" : "refresh-service-status"}" ${retrying ? "disabled" : ""}>${icon("refresh")}<span>${retrying ? "再接続中" : "今すぐ再チェック"}</span></button>`
         }
       </div>
     </section>
@@ -5377,6 +5635,22 @@ function renderDashboard() {
   `;
 }
 
+async function ensureGuardDashboardReady(options = {}) {
+  if (!state.user || !getAuthToken()) {
+    return loadGuardPublicStatus(options);
+  }
+  if (state.guard.source === "api" && state.guard.hasLoadedApiSettings) {
+    const statusUpdated = await loadGuardStatus({
+      silent: options.silent,
+      renderAfter: options.renderAfter,
+    });
+    if (state.guard.source === "api" && state.guard.hasLoadedApiSettings) {
+      return statusUpdated;
+    }
+  }
+  return loadGuardData(options);
+}
+
 async function loadGuardData(options = {}) {
   if (!state.user || !getAuthToken()) {
     resetGuardAuthenticatedState();
@@ -5385,9 +5659,29 @@ async function loadGuardData(options = {}) {
     }
     return;
   }
-  if (state.guard.inFlight) {
-    return;
+  if (guardDataLoadPromise) {
+    return guardDataLoadPromise;
   }
+
+  const loadPromise = performGuardDataLoad(options);
+  guardDataLoadPromise = loadPromise;
+  try {
+    const result = await loadPromise;
+    if (state.guard.source === "api" && state.guard.hasLoadedApiSettings) {
+      cancelGuardReconnect({ resetAttempts: true });
+    } else if (state.guard.source === "api-error") {
+      scheduleGuardReconnect();
+    }
+    return result;
+  } finally {
+    if (guardDataLoadPromise === loadPromise) {
+      guardDataLoadPromise = null;
+      state.guard.inFlight = false;
+    }
+  }
+}
+
+async function performGuardDataLoad(options = {}) {
   state.guard.inFlight = true;
   const hadLoadedApiSettings = state.guard.hasLoadedApiSettings;
   const requestId = state.requestIds.guard + 1;
@@ -5499,11 +5793,7 @@ async function loadGuardData(options = {}) {
     return;
   }
 
-  try {
-    state.guard.status = normalizeGuardStatus(await guardFetchJson(GUARD_STATUS_SAMPLE_ENDPOINT));
-  } catch {
-    state.guard.status = normalizeGuardStatus(null);
-  }
+  state.guard.status = normalizeGuardStatus(null);
   if (requestId !== state.requestIds.guard) {
     return;
   }
@@ -5518,7 +5808,7 @@ async function loadGuardData(options = {}) {
   state.guard.events = [];
   state.guard.loadedAt = new Date().toISOString();
   if (!state.guard.apiBase) {
-    state.guard.source = "sample";
+    state.guard.source = "not-configured";
   } else {
     state.guard.statusFailureCount = Math.max(1, state.guard.statusFailureCount);
   }
@@ -5542,6 +5832,117 @@ async function loadGuardData(options = {}) {
   state.guard.inFlight = false;
 }
 
+function cancelGuardReconnect(options = {}) {
+  if (guardDataRetryTimerId) {
+    window.clearTimeout(guardDataRetryTimerId);
+    guardDataRetryTimerId = null;
+  }
+  state.guard.reconnectAt = null;
+  if (options.resetAttempts) {
+    state.guard.reconnectAttempt = 0;
+  }
+}
+
+function scheduleGuardReconnect() {
+  if (
+    guardDataRetryTimerId ||
+    !guardReconnectEligible() ||
+    state.guard.reconnectAttempt >= GUARD_RECONNECT_DELAYS_MS.length
+  ) {
+    return;
+  }
+  const delayMs = GUARD_RECONNECT_DELAYS_MS[state.guard.reconnectAttempt];
+  state.guard.reconnectAttempt += 1;
+  state.guard.reconnectAt = Date.now() + delayMs;
+  guardDataRetryTimerId = window.setTimeout(() => {
+    guardDataRetryTimerId = null;
+    state.guard.reconnectAt = null;
+    if (!guardReconnectEligible()) {
+      return;
+    }
+    void loadGuardData({ silent: false, autoRetry: true });
+  }, delayMs);
+  if (state.activeProduct === "guard") {
+    render();
+  }
+}
+
+function guardReconnectEligible() {
+  return Boolean(
+    state.activeProduct === "guard" &&
+      !document.hidden &&
+      guardNetworkAvailable() &&
+      state.user &&
+      getAuthToken() &&
+      state.guard.source === "api-error"
+  );
+}
+
+async function retryGuardConnection(options = {}) {
+  cancelGuardReconnect({ resetAttempts: options.manual !== false });
+  if (!state.user || !getAuthToken()) {
+    return loadGuardPublicStatus({ silent: false });
+  }
+  state.guard.loadedAt = null;
+  state.guard.hasLoadedApiSettings = false;
+  return loadGuardData({ silent: false, force: true });
+}
+
+async function loadGuardPublicStatus(options = {}) {
+  if (state.user && getAuthToken()) {
+    return false;
+  }
+  const requestId = state.requestIds.guardPublicStatus + 1;
+  state.requestIds.guardPublicStatus = requestId;
+  state.guard.publicStatus = {
+    ...state.guard.publicStatus,
+    loading: true,
+    error: null,
+  };
+  if (!options.silent && options.renderAfter !== false) {
+    render();
+  }
+
+  try {
+    if (!state.guard.apiBase) {
+      throw new ApiError(0, "Guard APIの接続先が設定されていません。", undefined, "GUARD_API_NOT_CONFIGURED");
+    }
+    const [health, status] = await Promise.all([
+      guardFetchJson(guardApiUrl("/health")),
+      guardFetchJson(guardApiUrl("/status")),
+    ]);
+    if (requestId !== state.requestIds.guardPublicStatus) {
+      return false;
+    }
+    const normalizedStatus = normalizeGuardStatus(status);
+    const healthOk = String(health?.status ?? "").toLowerCase() === "ok";
+    state.guard.publicStatus = {
+      loading: false,
+      online: healthOk && normalizedStatus.online,
+      checkedAt: new Date().toISOString(),
+      error: healthOk && normalizedStatus.online
+        ? null
+        : "Guardは起動準備中、またはステータス更新待ちです。",
+    };
+    return state.guard.publicStatus.online;
+  } catch (error) {
+    if (requestId !== state.requestIds.guardPublicStatus) {
+      return false;
+    }
+    state.guard.publicStatus = {
+      loading: false,
+      online: false,
+      checkedAt: new Date().toISOString(),
+      error: formatError(error, "Guard APIに接続できませんでした。"),
+    };
+    return false;
+  } finally {
+    if (requestId === state.requestIds.guardPublicStatus && options.renderAfter !== false) {
+      render();
+    }
+  }
+}
+
 async function loadGuardStatus(options = {}) {
   if (!state.user || !getAuthToken() || state.guard.inFlight || state.guard.statusInFlight) {
     return false;
@@ -5553,7 +5954,10 @@ async function loadGuardStatus(options = {}) {
   }
 
   const requestId = state.requestIds.guard;
-  const statusUrl = state.guard.apiBase ? guardApiUrl("/status") : GUARD_STATUS_SAMPLE_ENDPOINT;
+  if (!state.guard.apiBase) {
+    return false;
+  }
+  const statusUrl = guardApiUrl("/status");
   const statusRequestId = state.guard.statusRequestId + 1;
   state.guard.statusRequestId = statusRequestId;
   state.guard.statusInFlight = true;
@@ -5582,7 +5986,7 @@ async function loadGuardStatus(options = {}) {
       render();
     }
     if (recovering) {
-      void loadGuardData({ silent: true });
+      void retryGuardConnection({ manual: false });
     }
     return changed;
   } catch (error) {
@@ -5609,6 +6013,7 @@ async function loadGuardStatus(options = {}) {
       if (options.renderAfter !== false && state.activeProduct === "guard" && !document.hidden) {
         render();
       }
+      scheduleGuardReconnect();
     }
     return false;
   } finally {
@@ -5638,7 +6043,7 @@ function guardCreateAdminGuildInvite(guildId) {
   );
 }
 
-async function guardFetchJson(url, options = {}) {
+async function guardFetchJson(url, options = {}, behavior = {}) {
   const headers = new Headers(options.headers ?? {});
   const hasBody = options.body !== undefined && options.body !== null;
   if (hasBody && !headers.has("Content-Type")) {
@@ -5655,19 +6060,24 @@ async function guardFetchJson(url, options = {}) {
     trustedGuardUrl && token && headers.get("Authorization") === `Bearer ${token}`,
   );
   let response;
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), SERVICE_STATUS_TIMEOUT_MS);
   try {
-    response = await fetch(url, {
+    response = await fetchWithResilience(url, {
       ...options,
       headers,
       cache: "no-store",
-      signal: controller.signal,
+    }, {
+      timeoutMs: behavior.timeoutMs ?? SERVICE_STATUS_TIMEOUT_MS,
+      readRetries: behavior.operationPoll ? false : undefined,
     });
-  } catch {
-    throw new Error(guardConnectionErrorMessage(url));
-  } finally {
-    window.clearTimeout(timeoutId);
+  } catch (error) {
+    if (behavior.operationPoll && options.signal?.aborted) {
+      throw new ApiError(0, "Guardの処理確認を中止しました。", undefined, "GUARD_OPERATION_ABORTED");
+    }
+    if (error instanceof ApiError) {
+      const code = error.code === "NETWORK_UNREACHABLE" ? "GUARD_UNREACHABLE" : error.code;
+      throw new ApiError(error.status, guardConnectionErrorMessage(url, error), error.requestId, code);
+    }
+    throw new ApiError(0, guardConnectionErrorMessage(url, error), undefined, "GUARD_UNREACHABLE");
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
@@ -5676,7 +6086,9 @@ async function guardFetchJson(url, options = {}) {
       response.status,
       detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`,
       response.headers.get("x-request-id") ?? undefined,
+      apiErrorCode(response.status, payload),
     );
+    error.payload = payload;
     if (response.status === 401 && sentCurrentAuthToken && token === getAuthToken()) {
       clearAuthToken();
       resetSessionState();
@@ -5686,7 +6098,379 @@ async function guardFetchJson(url, options = {}) {
   if (response.status === 204) {
     return undefined;
   }
-  return response.json().catch(() => null);
+  const payload = await response.json().catch(() => null);
+  const authenticatedMutation = Boolean(
+    !behavior.operationPoll &&
+      sentCurrentAuthToken &&
+      trustedGuardUrl &&
+      !["GET", "HEAD"].includes(requestMethod(options)),
+  );
+  if (!authenticatedMutation) {
+    return payload;
+  }
+  return resolveGuardMutationResponse(payload, {
+    httpStatus: response.status,
+    authToken: token,
+    signal: options.signal,
+    requestUrl: url,
+  });
+}
+
+function guardOperationId(payload) {
+  const operationId = isObject(payload) ? payload.operation_id : "";
+  return String(operationId ?? "").trim();
+}
+
+function guardOperationStatus(payload) {
+  if (!isObject(payload)) {
+    return "";
+  }
+  return String(payload.operation_status ?? payload.status ?? "").trim().toLowerCase();
+}
+
+function guardOperationError(code, message, operationId) {
+  const operationLabel = operationId ? ` Operation ID: ${operationId}` : "";
+  const stableCode = String(code || "GUARD_OPERATION_FAILED")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_.-]+/g, "_")
+    .slice(0, 80) || "GUARD_OPERATION_FAILED";
+  return new ApiError(0, `${message}${operationLabel}`, undefined, stableCode);
+}
+
+function guardOperationPollUrl(payload, operationId) {
+  const rawPollUrl = String(payload?.poll_url ?? `/operations/${encodeURIComponent(operationId)}`).trim();
+  let resolved;
+  try {
+    resolved = new URL(rawPollUrl, `${state.guard.apiBase.replace(/\/+$/, "")}/`);
+  } catch {
+    throw guardOperationError(
+      "GUARD_OPERATION_POLL_URL_INVALID",
+      "Guardから無効な処理確認URLが返されました。",
+      operationId,
+    );
+  }
+  if (!shouldAttachGuardAuth(resolved.href)) {
+    throw guardOperationError(
+      "GUARD_OPERATION_POLL_URL_UNTRUSTED",
+      "Guardから安全でない処理確認URLが返されたため、認証情報を送信しませんでした。",
+      operationId,
+    );
+  }
+  return resolved.href;
+}
+
+function guardOperationPollDelay(attempt) {
+  return Math.min(
+    GUARD_OPERATION_POLL_MAX_MS,
+    GUARD_OPERATION_POLL_INITIAL_MS + Math.max(0, attempt) * 50,
+  );
+}
+
+function waitForGuardOperationDelay(delayMs, deadline, signal, operationId) {
+  if (signal?.aborted) {
+    return Promise.reject(
+      guardOperationError("GUARD_OPERATION_ABORTED", "Guardの処理確認を中止しました。", operationId),
+    );
+  }
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    return Promise.resolve(false);
+  }
+  const resolvedDelay = Math.max(0, Math.min(delayMs, remainingMs));
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      signal?.removeEventListener("abort", handleAbort);
+      resolve(Date.now() < deadline);
+    }, resolvedDelay);
+    function handleAbort() {
+      window.clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", handleAbort);
+      reject(guardOperationError("GUARD_OPERATION_ABORTED", "Guardの処理確認を中止しました。", operationId));
+    }
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+function waitForGuardOperationVisibility(signal, operationId) {
+  if (signal?.aborted) {
+    return Promise.reject(
+      guardOperationError("GUARD_OPERATION_ABORTED", "Guardの処理確認を中止しました。", operationId),
+    );
+  }
+  if (!document.hidden) {
+    return Promise.resolve(0);
+  }
+  const hiddenAt = Date.now();
+  return new Promise((resolve, reject) => {
+    function cleanup() {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      signal?.removeEventListener("abort", handleAbort);
+    }
+    function handleVisibilityChange() {
+      if (document.hidden) {
+        return;
+      }
+      cleanup();
+      resolve(Math.max(0, Date.now() - hiddenAt));
+    }
+    function handleAbort() {
+      cleanup();
+      reject(guardOperationError("GUARD_OPERATION_ABORTED", "Guardの処理確認を中止しました。", operationId));
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+async function waitForGuardOperationPollWindow(delayMs, deadline, signal, operationId) {
+  const hiddenDurationMs = await waitForGuardOperationVisibility(signal, operationId);
+  const adjustedDeadline = deadline + hiddenDurationMs;
+  return {
+    canContinue: await waitForGuardOperationDelay(delayMs, adjustedDeadline, signal, operationId),
+    deadline: adjustedDeadline,
+  };
+}
+
+function guardMutationResponseKind(requestUrl, operation) {
+  const kind = String(operation?.kind ?? "").trim().toLowerCase();
+  if (kind) {
+    return kind;
+  }
+  try {
+    const pathname = new URL(requestUrl, window.location.href).pathname.replace(/\/+$/, "");
+    if (pathname.endsWith("/verification/settings")) {
+      return "verification_panel";
+    }
+    if (/\/admin\/guilds\/[^/]+\/invite$/.test(pathname)) {
+      return "admin_guild_invite";
+    }
+  } catch {
+    // A trusted request URL was already validated before polling; unknown shapes use the generic result.
+  }
+  return "";
+}
+
+function guardOperationFailure(payload, operationId) {
+  const error = isObject(payload?.error) ? payload.error : {};
+  const errorCode = String(error.error_code ?? payload?.error_code ?? "GUARD_OPERATION_FAILED");
+  const reason = String(
+    error.message ??
+      error.error ??
+      error.reason ??
+      error.type ??
+      payload?.message ??
+      payload?.reason ??
+      (typeof payload?.error === "string" ? payload.error : ""),
+  ).trim();
+  const message = reason ? `Guardの処理に失敗しました: ${reason}` : "Guardの処理に失敗しました。";
+  return guardOperationError(errorCode, message, operationId);
+}
+
+function guardPanelFailureDetails(panel, options = {}) {
+  if (!isObject(panel)) {
+    return {
+      reason: "verification_panel_result_invalid",
+      errorCode: "G-PANEL-RESULT-INVALID",
+      message: "認証パネルの処理結果がありません。",
+    };
+  }
+  const status = String(panel.status ?? "").trim().toLowerCase();
+  const successful = options.terminalResult
+    ? status === "published"
+    : GUARD_PANEL_SUCCESS_STATUSES.has(status);
+  if (panel.ok !== false && successful) {
+    return null;
+  }
+  const nestedError = isObject(panel.error) ? panel.error : {};
+  const reason = String(
+    nestedError.error ||
+      nestedError.reason ||
+      nestedError.type ||
+      panel.reason ||
+      (typeof panel.error === "string" ? panel.error : "") ||
+      status ||
+      "verification_panel_failed",
+  ).trim();
+  const rawCode = String(nestedError.error_code ?? panel.error_code ?? "").trim();
+  const derivedCode = `G-PANEL-${reason.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "FAILED"}`;
+  const message = String(nestedError.message ?? panel.message ?? "").trim();
+  return { reason, errorCode: rawCode || derivedCode.slice(0, 96), message };
+}
+
+function guardPanelSemanticError(panel, operationId, options = {}) {
+  const failure = guardPanelFailureDetails(panel, options);
+  if (!failure) {
+    return null;
+  }
+  const detail = failure.message || failure.reason;
+  return guardOperationError(
+    failure.errorCode,
+    `認証パネルの反映に失敗しました: ${detail}`,
+    operationId,
+  );
+}
+
+function requireGuardMutationSemanticSuccess(payload, requestUrl) {
+  if (guardMutationResponseKind(requestUrl, payload) !== "verification_panel") {
+    return payload;
+  }
+  const panel = isObject(payload?.panel) ? payload.panel : null;
+  const error = guardPanelSemanticError(panel, guardOperationId(payload));
+  if (error) {
+    throw error;
+  }
+  return payload;
+}
+
+function mergeGuardOperationResult(initialPayload, operation, requestUrl, operationId) {
+  const result = isObject(operation?.result) ? operation.result : {};
+  const kind = guardMutationResponseKind(requestUrl, operation);
+  if (kind === "verification_panel") {
+    const semanticError = guardPanelSemanticError(result, operationId, { terminalResult: true });
+    if (semanticError) {
+      throw semanticError;
+    }
+    return {
+      ...initialPayload,
+      status: "updated",
+      panel: {
+        ...result,
+        operation_id: operationId,
+        operation_status: "completed",
+      },
+    };
+  }
+  if (kind === "admin_guild_invite") {
+    if (result.ok === false) {
+      throw guardOperationFailure(result, operationId);
+    }
+    if (!isObject(result.invite)) {
+      throw guardOperationError(
+        "GUARD_OPERATION_RESULT_INVALID",
+        "Guardの招待リンク作成結果が不正です。",
+        operationId,
+      );
+    }
+    return result.invite;
+  }
+  return result;
+}
+
+async function resolveGuardMutationResponse(payload, context) {
+  const operationId = guardOperationId(payload);
+  const status = guardOperationStatus(payload);
+  const operationPending = context.httpStatus === 202 || ["pending", "running"].includes(status);
+  if (status === "failed") {
+    throw guardOperationFailure(payload, operationId);
+  }
+  if (!operationPending) {
+    return requireGuardMutationSemanticSuccess(payload, context.requestUrl);
+  }
+  if (!operationId) {
+    throw guardOperationError(
+      "GUARD_OPERATION_ID_MISSING",
+      "Guardが処理待ちを返しましたが、追跡用IDがありません。操作結果を確定できません。",
+      "",
+    );
+  }
+  if (status && !["pending", "running"].includes(status)) {
+    throw guardOperationError(
+      "GUARD_OPERATION_STATUS_INVALID",
+      "Guardから不明な処理状態が返されました。",
+      operationId,
+    );
+  }
+
+  const pollUrl = guardOperationPollUrl(payload, operationId);
+  let deadline = Date.now() + GUARD_OPERATION_TIMEOUT_MS;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    const pollWindow = await waitForGuardOperationPollWindow(
+      guardOperationPollDelay(attempt),
+      deadline,
+      context.signal,
+      operationId,
+    );
+    deadline = pollWindow.deadline;
+    if (!pollWindow.canContinue) {
+      break;
+    }
+    if (context.authToken !== getAuthToken()) {
+      throw guardOperationError(
+        "GUARD_OPERATION_SESSION_CHANGED",
+        "ログイン状態が変わったため、Guardの処理確認を終了しました。",
+        operationId,
+      );
+    }
+
+    let operation;
+    try {
+      const remainingMs = Math.max(1, deadline - Date.now());
+      operation = await guardFetchJson(
+        pollUrl,
+        { method: "GET", signal: context.signal },
+        { operationPoll: true, timeoutMs: Math.min(SERVICE_STATUS_TIMEOUT_MS, remainingMs) },
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "GUARD_OPERATION_ABORTED") {
+        throw guardOperationError("GUARD_OPERATION_ABORTED", "Guardの処理確認を中止しました。", operationId);
+      }
+      if (error instanceof ApiError && isObject(error.payload) && guardOperationStatus(error.payload) === "failed") {
+        const returnedId = guardOperationId(error.payload);
+        if (returnedId && returnedId !== operationId) {
+          throw guardOperationError(
+            "GUARD_OPERATION_ID_MISMATCH",
+            "Guardから処理IDが一致しない応答が返されたため、結果を採用しませんでした。",
+            operationId,
+          );
+        }
+        throw guardOperationFailure(error.payload, operationId);
+      }
+      if (error instanceof ApiError && (error.status === 0 || [502, 503, 504].includes(error.status))) {
+        if (Date.now() < deadline) {
+          attempt += 1;
+          continue;
+        }
+        break;
+      }
+      const reason = error instanceof Error ? error.message : "処理状態を取得できませんでした。";
+      throw guardOperationError(
+        "GUARD_OPERATION_POLL_FAILED",
+        `Guardの処理状態を確認できませんでした。${reason}`,
+        operationId,
+      );
+    }
+
+    const returnedId = guardOperationId(operation);
+    if (returnedId !== operationId) {
+      throw guardOperationError(
+        "GUARD_OPERATION_ID_MISMATCH",
+        "Guardから処理IDが一致しない応答が返されたため、結果を採用しませんでした。",
+        operationId,
+      );
+    }
+    const nextStatus = guardOperationStatus(operation);
+    if (nextStatus === "completed") {
+      return mergeGuardOperationResult(payload, operation, context.requestUrl, operationId);
+    }
+    if (nextStatus === "failed") {
+      throw guardOperationFailure(operation, operationId);
+    }
+    if (!["pending", "running"].includes(nextStatus)) {
+      throw guardOperationError(
+        "GUARD_OPERATION_STATUS_INVALID",
+        "Guardから不明な処理状態が返されました。",
+        operationId,
+      );
+    }
+    attempt += 1;
+  }
+  throw guardOperationError(
+    "GUARD_OPERATION_TIMEOUT",
+    "Guard側では処理を継続していますが、ダッシュボードの待機時間を超えました。しばらく待ってから再読み込みしてください。",
+    operationId,
+  );
 }
 
 function normalizeAuditProduct(productId) {
@@ -5943,7 +6727,13 @@ function shouldAttachGuardAuth(rawUrl) {
   }
 }
 
-function guardConnectionErrorMessage(rawUrl) {
+function guardConnectionErrorMessage(rawUrl, cause = null) {
+  if (!navigator.onLine || (cause instanceof ApiError && cause.code === "BROWSER_OFFLINE")) {
+    return "インターネット接続がオフラインです。接続が戻るとGuardへ自動で再接続します。";
+  }
+  if (cause instanceof ApiError && cause.code === "REQUEST_TIMEOUT") {
+    return "Guard APIの応答がタイムアウトしました。自動再接続を行います。";
+  }
   try {
     const url = new URL(rawUrl);
     if (window.location.protocol === "https:" && url.protocol === "http:" && !isLocalDashboardOrigin()) {
@@ -6558,7 +7348,7 @@ function renderGuardInvitation() {
         </label>
         <label class="toggle-row guard-verification-toggle">
           <input type="checkbox" data-guard-invitation-field="dm_warning_enabled" ${form.dm_warning_enabled ? "checked" : ""} ${form.enabled ? "" : "disabled"} />
-          <span><strong>リンク作成者へDMで警告する</strong><small>無効化した招待リンクと理由を作成者へ通知します。</small></span>
+          <span><strong>無効化成功時にオーナーへDMする</strong><small>作成者情報と無効化した招待リンクをサーバーオーナーへ通知します。</small></span>
         </label>
       </form>
     </section>
@@ -10972,12 +11762,16 @@ function hostActionLabel(action) {
   }[action] ?? action;
 }
 
-function renderStatusBanner(tone, message) {
+function renderStatusBanner(tone, message, title = "") {
   const iconName = tone === "error" ? "error" : tone === "success" ? "success" : "info";
+  const fallbackTitle = tone === "error" ? "⚠️ 操作を完了できませんでした" : tone === "success" ? "✅ 完了しました" : "⏳ 処理しています";
+  const connectionRetry = tone === "error" && /エラーコード:|Request ID:/.test(String(message));
   return `
-    <div class="status-banner status-banner--${tone}" role="${tone === "error" ? "alert" : "status"}">
-      ${icon(iconName)}<span>${escapeHtml(message)}</span>
-    </div>
+    <article class="status-banner status-banner--${tone}" role="${tone === "error" ? "alert" : "status"}">
+      <span class="status-banner__icon">${icon(iconName)}</span>
+      <span class="status-banner__copy"><strong>${escapeHtml(title || fallbackTitle)}</strong><span>${escapeHtml(message)}</span></span>
+      ${connectionRetry ? `<button class="status-banner__retry" type="button" data-action="retry-api-connection">${icon("refresh")}<span>接続を再確認</span></button>` : ""}
+    </article>
   `;
 }
 
@@ -10988,26 +11782,46 @@ function renderStatusToasts() {
   }
   return `
     <div class="status-toast-region" aria-live="polite" aria-label="ステータス通知">
-      ${toasts.map((toast) => renderStatusBanner(toast.tone, toast.message)).join("")}
+      ${toasts.map((toast) => renderStatusBanner(toast.tone, toast.message, toast.title)).join("")}
     </div>
   `;
 }
 
 function collectStatusToasts() {
   const toasts = [];
+  if (state.operationNotice) {
+    toasts.push(state.operationNotice);
+  }
+  if (state.saving) {
+    toasts.push({ tone: "info", title: "💾 設定を保存中", message: "Botへ安全に送信しています。このままお待ちください。" });
+  } else if (state.ticketPanelPublishing) {
+    toasts.push({ tone: "info", title: "📨 パネルを送信中", message: "Discordへの送信結果を確認しています。" });
+  }
   if (state.message) {
     toasts.push({ tone: "error", message: state.message });
   }
-  if (!state.user) {
-    if (state.security.error) {
-      toasts.push({ tone: "error", message: state.security.error });
-    }
-    if (state.security.message) {
-      toasts.push({ tone: state.security.verified ? "success" : "info", message: state.security.message });
+  const view = activeSettingsView();
+  if (state.activeProduct === "guard" && state.user) {
+    const featureId = activeGuardFeature().id;
+    const noticeByFeature = {
+      verification: [state.guard.verificationError, state.guard.verificationMessage, state.guard.verificationSaving, "認証設定"],
+      invitation: [state.guard.invitationError, state.guard.invitationMessage, state.guard.invitationSaving, "招待リンク設定"],
+      moderation: [state.guard.moderationError, state.guard.moderationMessage, state.guard.moderationSaving, "荒らし対策設定"],
+      logging: [state.guard.loggingError, state.guard.loggingMessage, state.guard.loggingSaving, "ログ設定"],
+      risk: [state.guard.riskError, state.guard.riskMessage, state.guard.riskSaving, "危険度設定"],
+      admin: [state.guard.adminError, state.guard.adminMessage, Boolean(state.guard.adminInviteRunning), "管理操作"],
+    }[featureId];
+    if (noticeByFeature) {
+      const [error, success, saving, label] = noticeByFeature;
+      if (saving) {
+        toasts.push({ tone: "info", title: `⏳ ${label}を送信中`, message: "Guardからの応答を待っています。" });
+      } else if (error) {
+        toasts.push({ tone: "error", title: `⚠️ ${label}を保存できませんでした`, message: error });
+      } else if (success) {
+        toasts.push({ tone: "success", title: `✅ ${label}を反映しました`, message: success });
+      }
     }
   }
-
-  const view = activeSettingsView();
   if (view === "user") {
     if (state.playlistError) {
       toasts.push({ tone: "error", message: state.playlistError });
@@ -11297,6 +12111,9 @@ function discardActiveSettings() {
     } else if (activeGuardFeature().id === "logging") {
       state.guard.loggingForm = cloneState(state.guard.savedLoggingForm) ?? normalizeGuardLoggingForm(null);
       state.dirtyViews.guardLogging = false;
+    } else if (activeGuardFeature().id === "risk") {
+      state.guard.riskForm = cloneState(state.guard.savedRiskForm) ?? normalizeGuardRiskForm(null);
+      state.dirtyViews.guardRisk = false;
     } else {
       state.guard.verificationForm = cloneState(state.guard.savedVerificationForm) ?? normalizeGuardVerificationForm(null);
       state.dirtyViews.guardVerification = false;
@@ -11484,12 +12301,18 @@ function handleClick(event) {
       void logout();
     } else if (action === "refresh-service-status") {
       void refreshServiceStatus();
+    } else if (action === "retry-api-connection") {
+      if (state.activeProduct === "guard") {
+        void retryGuardConnection({ manual: true });
+      } else {
+        void refreshServiceStatus();
+      }
     } else if (action === "refresh-guard-status") {
-      void loadGuardData();
+      void retryGuardConnection({ manual: true });
     } else if (action === "refresh-host") {
       void loadHostAdminData();
     } else if (action === "refresh-guard-admin") {
-      void loadGuardData();
+      void retryGuardConnection({ manual: true });
     } else if (action === "reload-guild-data") {
       if (state.selectedGuildId) {
         void loadGuildData(state.selectedGuildId, { force: true });
@@ -12189,7 +13012,7 @@ function updateBumpRankSource(target, options = { renderAfter: true }) {
 
 function formatError(error, fallback) {
   if (error instanceof ApiError) {
-    return error.requestId ? `${error.message} Request ID: ${error.requestId}` : error.message;
+    return error.message;
   }
   if (error instanceof Error && error.message.trim()) {
     return error.message;
@@ -12379,6 +13202,7 @@ function icon(name, label = "") {
     book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/>',
     bot: '<rect width="14" height="10" x="5" y="11" rx="2"/><path d="M12 8V4"/><path d="M8 4h8"/><circle cx="9" cy="16" r="1"/><circle cx="15" cy="16" r="1"/><path d="M2 15h3"/><path d="M19 15h3"/>',
     chevronDown: '<path d="m6 9 6 6 6-6"/>',
+    chevronRight: '<path d="m9 18 6-6-6-6"/>',
     chevronUp: '<path d="m18 15-6-6-6 6"/>',
     error: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
     external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
