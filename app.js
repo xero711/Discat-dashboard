@@ -374,9 +374,16 @@ const GUARD_FEATURES = [
   {
     id: "moderation",
     label: "荒らし対策",
-    description: "連投リンク、招待リンク、連続投稿、絵文字スパム、連続メンション、暴言、下ネタ、NGワードの検知と処罰を設定します。",
-    help: "連投系は検知ペースと処置、暴言/下ネタは処罰と検知しないチャンネル、NGワードは追加語句と処罰を設定します。",
+    description: "連投、投票、画像・ファイル、外部アプリ、メンション、暴言、NGワードなどの検知と処置を設定します。",
+    help: "検知条件の実数値、処置、除外チャンネル、信頼するユーザー・ロール・Bot・Webhook・外部アプリをサーバーごとに設定します。",
     icon: "shield",
+  },
+  {
+    id: "abuse-registry",
+    label: "荒らし登録",
+    description: "悪質な利用者を証拠付きで報告し、Guard全体で共有する審査状況を確認します。",
+    help: "サーバー管理者は報告と異議申し立てができます。Guardオーナーの承認前に全体拒否へ反映されることはありません。",
+    icon: "alert",
   },
   {
     id: "risk",
@@ -456,6 +463,21 @@ const GUARD_MODERATION_FEATURES = [
     description: "短時間にメンションを連続投稿したユーザーを検知します。",
   },
   {
+    id: "poll_spam",
+    label: "投票スパム検知",
+    description: "短時間に投票を繰り返し作成する荒らしを検知します。",
+  },
+  {
+    id: "automation_spam",
+    label: "外部アプリ・Webhook検知",
+    description: "許可していないBot、Webhook、外部アプリによる大量投稿や同文連投を検知します。",
+  },
+  {
+    id: "attachment_spam",
+    label: "画像・ファイル連投検知",
+    description: "短時間に画像やファイルを大量投稿する荒らしを検知します。",
+  },
+  {
     id: "profanity",
     label: "暴言検知",
     description: "攻撃的な言葉や暴言を検知します。検知しないチャンネルを追加できます。",
@@ -478,7 +500,7 @@ const GUARD_MODERATION_LEVELS = [
   { id: "high", label: "厳しめ" },
 ];
 
-const GUARD_MODERATION_PACE_FEATURE_IDS = new Set(["invite_spam", "other_links", "spam", "emoji_spam", "mention_spam"]);
+const GUARD_MODERATION_PACE_FEATURE_IDS = new Set(["invite_spam", "other_links", "spam", "emoji_spam", "mention_spam", "poll_spam", "automation_spam", "attachment_spam"]);
 const GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS = new Set(["profanity", "sexual_language"]);
 const GUARD_MODERATION_NG_WORD_FEATURE_IDS = new Set(["ng_words"]);
 
@@ -497,14 +519,36 @@ const GUARD_RISK_ACTIONS = [
 ];
 
 const GUARD_MODERATION_DEFAULTS = {
-  invite_spam: { enabled: true, level: "medium", action: "kick", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  other_links: { enabled: true, level: "high", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  emoji_spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  mention_spam: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  profanity: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  sexual_language: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true },
-  ng_words: { enabled: true, level: "medium", action: "delete", log_channel_id: "", log_channel_ids: [], target_channel_ids: [], all_channels_enabled: true, ng_words: [] },
+  invite_spam: { enabled: false, level: "medium", action: "delete" },
+  other_links: { enabled: false, level: "medium", action: "delete" },
+  spam: { enabled: false, level: "medium", action: "delete" },
+  emoji_spam: { enabled: false, level: "medium", action: "delete" },
+  mention_spam: { enabled: false, level: "medium", action: "delete" },
+  poll_spam: { enabled: false, level: "medium", action: "delete" },
+  automation_spam: { enabled: false, level: "medium", action: "delete" },
+  attachment_spam: { enabled: false, level: "medium", action: "delete" },
+  profanity: { enabled: false, level: "medium", action: "delete" },
+  sexual_language: { enabled: false, level: "medium", action: "delete" },
+  ng_words: { enabled: false, level: "medium", action: "delete", ng_words: [] },
+};
+
+const GUARD_MODERATION_TRUST_FIELDS = [
+  { id: "trusted_user_ids", label: "信頼するユーザーID", singular: "ユーザー" },
+  { id: "trusted_role_ids", label: "信頼するロールID", singular: "ロール" },
+  { id: "trusted_bot_ids", label: "信頼するBot ID", singular: "Bot" },
+  { id: "trusted_webhook_ids", label: "信頼するWebhook ID", singular: "Webhook" },
+  { id: "trusted_application_ids", label: "信頼する外部アプリID", singular: "外部アプリ" },
+];
+
+const GUARD_MODERATION_RULE_PREFIXES = {
+  invite_spam: ["invite_"],
+  other_links: ["link_"],
+  spam: ["spam_"],
+  emoji_spam: ["emoji_"],
+  mention_spam: ["mention_"],
+  poll_spam: ["poll_"],
+  automation_spam: ["automation_"],
+  attachment_spam: ["attachment_"],
 };
 
 const GUARD_LOGGING_EVENTS = [
@@ -848,6 +892,12 @@ const state = {
     verificationSettings: [],
     invitationSettings: [],
     moderationSettings: [],
+    moderationCatalog: {
+      features: [],
+      levels: GUARD_MODERATION_LEVELS,
+      actions: GUARD_MODERATION_ACTIONS,
+      rules: {},
+    },
     loggingSettings: [],
     riskSettings: [],
     verificationOptions: null,
@@ -864,6 +914,19 @@ const state = {
     invitationError: null,
     moderationMessage: null,
     moderationError: null,
+    abuseRegistry: {
+      loaded: false,
+      loading: false,
+      saving: false,
+      cases: [],
+      appeals: [],
+      stats: {},
+      is_owner: false,
+      actor_user_id: "",
+      reason_codes: [],
+      error: null,
+      message: null,
+    },
     loggingMessage: null,
     loggingError: null,
     riskMessage: null,
@@ -897,6 +960,11 @@ const state = {
     moderationForm: {
       guild_id: "",
       features: {},
+      trusted_user_ids: [],
+      trusted_role_ids: [],
+      trusted_bot_ids: [],
+      trusted_webhook_ids: [],
+      trusted_application_ids: [],
     },
     loggingForm: {
       guild_id: "",
@@ -1362,7 +1430,9 @@ async function loadGuardDashboardData() {
     if (guildId) {
       void ensureDashboardAccessLogged("guard", guildId);
     }
-    if (activeGuardFeature().id === "audit-log" && guildId) {
+    if (activeGuardFeature().id === "abuse-registry") {
+      await loadGuardAbuseRegistry();
+    } else if (activeGuardFeature().id === "audit-log" && guildId) {
       await loadAuditLogs("guard", guildId);
     } else {
       render();
@@ -1380,7 +1450,9 @@ async function loadGuardDashboardData() {
   if (guildId) {
     void ensureDashboardAccessLogged("guard", guildId);
   }
-  if (activeGuardFeature().id === "audit-log" && guildId) {
+  if (activeGuardFeature().id === "abuse-registry") {
+    await loadGuardAbuseRegistry();
+  } else if (activeGuardFeature().id === "audit-log" && guildId) {
     await loadAuditLogs("guard", guildId);
   } else {
     render();
@@ -3704,6 +3776,9 @@ function guardModerationFormFromSettings(guildId) {
   return normalizeGuardModerationForm({
     guild_id: resolvedGuildId,
     features: settings?.features ?? {},
+    ...Object.fromEntries(
+      GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, settings?.[field.id] ?? []]),
+    ),
   });
 }
 
@@ -3833,7 +3908,7 @@ function hasUnsavedChanges() {
 
 function activeGuardDirtyView() {
   const featureId = activeGuardFeature().id;
-  if (featureId === "admin" || featureId === "audit-log") {
+  if (featureId === "admin" || featureId === "audit-log" || featureId === "abuse-registry") {
     return "guardAdmin";
   }
   if (featureId === "moderation") {
@@ -4422,6 +4497,7 @@ function resetGuardAuthenticatedState() {
   state.guard.status = normalizeGuardStatus(null);
   state.guard.verificationSettings = [];
   state.guard.moderationSettings = [];
+  state.guard.moderationCatalog = normalizeGuardModerationCatalog(null);
   state.guard.loggingSettings = [];
   state.guard.invitationSettings = [];
   state.guard.riskSettings = [];
@@ -4439,6 +4515,19 @@ function resetGuardAuthenticatedState() {
   state.guard.invitationError = null;
   state.guard.moderationMessage = null;
   state.guard.moderationError = null;
+  state.guard.abuseRegistry = {
+    loaded: false,
+    loading: false,
+    saving: false,
+    cases: [],
+    appeals: [],
+    stats: {},
+    is_owner: false,
+    actor_user_id: "",
+    reason_codes: [],
+    error: null,
+    message: null,
+  };
   state.guard.loggingMessage = null;
   state.guard.loggingError = null;
   state.guard.riskMessage = null;
@@ -5742,6 +5831,7 @@ async function performGuardDataLoad(options = {}) {
         state.guard.invitationSettings = normalizeGuardInvitationSettings(invitationResult.value?.settings);
       }
       if (moderationResult.status === "fulfilled") {
+        state.guard.moderationCatalog = normalizeGuardModerationCatalog(moderationResult.value);
         state.guard.moderationSettings = normalizeGuardModerationSettings(moderationResult.value?.settings);
       }
       if (loggingResult.status === "fulfilled") {
@@ -5815,6 +5905,7 @@ async function performGuardDataLoad(options = {}) {
   state.guard.verificationSettings = [];
   state.guard.invitationSettings = [];
   state.guard.moderationSettings = [];
+  state.guard.moderationCatalog = normalizeGuardModerationCatalog(null);
   state.guard.loggingSettings = [];
   state.guard.riskSettings = [];
   state.guard.verificationOptions = null;
@@ -6889,6 +6980,19 @@ function normalizeGuardModerationChannelIds(value) {
     .filter((item, index, array) => item && /^\d+$/.test(item) && array.indexOf(item) === index);
 }
 
+function normalizeGuardModerationIds(value) {
+  const rawItems = typeof value === "string"
+    ? value.split(/[\s,、]+/)
+    : Array.isArray(value)
+      ? value
+      : value
+        ? [value]
+        : [];
+  return rawItems
+    .map((item) => String(item ?? "").trim())
+    .filter((item, index, array) => item && /^\d{15,22}$/.test(item) && array.indexOf(item) === index);
+}
+
 function normalizeGuardInvitationForm(form) {
   return {
     guild_id: String(form?.guild_id ?? ""),
@@ -6949,13 +7053,11 @@ function normalizeGuardModerationWords(value) {
 
 function normalizeGuardModerationFeatureSettings(featureId, settings) {
   const defaults = GUARD_MODERATION_DEFAULTS[featureId] ?? {
-    enabled: true,
+    enabled: false,
     level: "medium",
     action: "delete",
-    log_channel_id: "",
     log_channel_ids: [],
-    target_channel_ids: [],
-    all_channels_enabled: true,
+    ignored_channel_ids: [],
   };
   const rawLogChannelRows = Array.isArray(settings?.log_channel_ids)
     ? settings.log_channel_ids
@@ -6964,21 +7066,21 @@ function normalizeGuardModerationFeatureSettings(featureId, settings) {
       : defaults.log_channel_ids;
   const logChannelIds = normalizeGuardModerationChannelRows(rawLogChannelRows);
   const firstLogChannelId = logChannelIds.find((item) => item) ?? "";
-  const targetChannelIds = GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS.has(featureId)
-    ? normalizeGuardModerationChannelIds(settings?.target_channel_ids ?? settings?.ignored_channel_ids ?? settings?.disabled_channel_ids ?? defaults.target_channel_ids)
-    : [];
-  const level = GUARD_MODERATION_TEXT_FILTER_FEATURE_IDS.has(featureId)
-    ? defaults.level
-    : normalizeGuardModerationLevel(settings?.level ?? defaults.level);
+  const ignoredChannelIds = normalizeGuardModerationChannelIds(
+    settings?.ignored_channel_ids ?? settings?.target_channel_ids ?? settings?.disabled_channel_ids ?? defaults.ignored_channel_ids,
+  );
   return {
-    enabled: settings?.enabled !== false,
-    level,
+    enabled: settings?.enabled === true,
+    level: normalizeGuardModerationLevel(settings?.level ?? defaults.level),
     action: normalizeGuardModerationAction(settings?.action, defaults.action),
     log_channel_id: firstLogChannelId,
     log_channel_ids: logChannelIds,
-    target_channel_ids: targetChannelIds,
-    ignored_channel_ids: targetChannelIds,
+    target_channel_ids: ignoredChannelIds,
+    ignored_channel_ids: ignoredChannelIds,
     all_channels_enabled: true,
+    ...Object.fromEntries(
+      GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, normalizeGuardModerationIds(settings?.[field.id])]),
+    ),
     ng_words: GUARD_MODERATION_NG_WORD_FEATURE_IDS.has(featureId)
       ? normalizeGuardModerationWords(settings?.ng_words ?? settings?.words ?? defaults.ng_words)
       : [],
@@ -6989,13 +7091,55 @@ function normalizeGuardModerationForm(form) {
   const rawFeatures = isObject(form?.features) ? form.features : {};
   return {
     guild_id: String(form?.guild_id ?? ""),
+    ...Object.fromEntries(
+      GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, normalizeGuardModerationIds(form?.[field.id])]),
+    ),
     features: Object.fromEntries(
-      GUARD_MODERATION_FEATURES.map((feature) => [
+      guardModerationFeatureDefinitions().map((feature) => [
         feature.id,
         normalizeGuardModerationFeatureSettings(feature.id, rawFeatures[feature.id]),
       ]),
     ),
   };
+}
+
+function normalizeGuardModerationCatalog(payload) {
+  const features = Array.isArray(payload?.features)
+    ? payload.features.map((feature) => ({
+        id: String(feature?.id ?? ""),
+        label: String(feature?.label ?? feature?.id ?? ""),
+        description: String(feature?.description ?? ""),
+      })).filter((feature) => feature.id)
+    : [];
+  const levels = Array.isArray(payload?.levels)
+    ? payload.levels.map((level) => ({
+        id: String(level?.id ?? ""),
+        label: String(level?.label ?? level?.id ?? ""),
+        description: String(level?.description ?? ""),
+      })).filter((level) => level.id)
+    : [];
+  const actions = Array.isArray(payload?.actions)
+    ? payload.actions.map((action) => ({
+        id: String(action?.id ?? ""),
+        label: String(action?.label ?? action?.id ?? ""),
+      })).filter((action) => action.id)
+    : [];
+  return {
+    features,
+    levels: levels.length ? levels : GUARD_MODERATION_LEVELS,
+    actions: actions.length ? actions : GUARD_MODERATION_ACTIONS,
+    rules: isObject(payload?.rules) ? payload.rules : {},
+  };
+}
+
+function guardModerationFeatureDefinitions() {
+  const apiFeatures = state?.guard?.moderationCatalog?.features ?? [];
+  const byId = new Map(GUARD_MODERATION_FEATURES.map((feature) => [feature.id, feature]));
+  apiFeatures.forEach((feature) => {
+    const fallback = byId.get(feature.id) ?? {};
+    byId.set(feature.id, { ...fallback, ...feature });
+  });
+  return [...byId.values()];
 }
 
 function normalizeGuardModerationSettings(settings) {
@@ -7247,6 +7391,8 @@ function renderGuardDashboard() {
   const pageTitle =
     feature.id === "admin"
       ? "BOT詳細"
+      : feature.id === "abuse-registry"
+        ? "全サーバー共通"
       : selectedGuild?.name ?? (guardConfigurableGuilds().length ? "サーバーを選択" : "設定可能なサーバーなし");
   return `
     <div class="dashboard-grid dashboard-grid--guard">
@@ -7275,6 +7421,9 @@ function activeGuardFeature() {
 function renderGuardFeatureContent(feature) {
   if (feature?.id === "audit-log") {
     return renderAuditLogPanel("guard");
+  }
+  if (feature?.id === "abuse-registry") {
+    return renderGuardAbuseRegistry();
   }
   if (feature?.id === "admin") {
     return renderGuardHostAdminPanel();
@@ -7716,7 +7865,7 @@ function renderGuardModeration() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>連投リンク、招待リンク、連続投稿、絵文字スパム、連続メンションはペースと処置を設定します。暴言と下ネタは処罰と検知しないチャンネル、NGワードは追加語句と処罰を設定します。</span>
+        ${icon("shield")}<span>最初はすべて無効です。必要な検知だけを有効にし、各レベルの実際の秒数・回数を確認して保存してください。通常会話を除外したい場合は、チャンネルまたは信頼IDを追加できます。</span>
       </div>
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
       ${state.guard.moderationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.moderationMessage)}</span></p>` : ""}
@@ -7726,8 +7875,17 @@ function renderGuardModeration() {
           <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
+        <article class="feature-card guard-moderation-card guard-moderation-trust-card">
+          <div class="feature-card__header">
+            <div class="panel-heading">${icon("lock")}<h2>サーバー共通の信頼リスト</h2></div>
+          </div>
+          <p class="guard-moderation-card__description">ここに追加したIDは、すべての荒らし検知から除外されます。普段使う連携BotやWebhookだけを登録してください。</p>
+          <div class="settings-grid guard-moderation-card__fields">
+            ${GUARD_MODERATION_TRUST_FIELDS.map((field) => renderGuardModerationIdListField("guild", field, form[field.id])).join("")}
+          </div>
+        </article>
         <div class="guard-moderation-grid">
-          ${GUARD_MODERATION_FEATURES.map((feature) => renderGuardModerationFeatureCard(feature, form.features[feature.id], selectedGuild)).join("")}
+          ${guardModerationFeatureDefinitions().map((feature) => renderGuardModerationFeatureCard(feature, form.features[feature.id], selectedGuild)).join("")}
         </div>
       </form>
       ${state.guard.verificationOptionsError ? `<p class="guard-inline-hint">チャンネル候補を読み込めませんでした: ${escapeHtml(state.guard.verificationOptionsError)}</p>` : ""}
@@ -7766,21 +7924,26 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
           <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="enabled" ${normalized.enabled ? "checked" : ""} />
           <span>この検知を有効にする</span>
         </label>
-        ${isPaceFeature ? `
-          <label class="field">
-            <span>検知ペース</span>
-            <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
-              ${GUARD_MODERATION_LEVELS.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}</option>`).join("")}
-            </select>
-          </label>
-        ` : ""}
+        ${!isNgWordFeature ? `<label class="field">
+          <span>${isPaceFeature ? "検知ペース" : "検知感度"}</span>
+          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
+            ${state.guard.moderationCatalog.levels.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}${level.description ? ` — ${escapeHtml(level.description)}` : ""}</option>`).join("")}
+          </select>
+          <small>${isPaceFeature ? "下の実数値を確認して選べます。" : "誤検知が気になる場合は「ゆるめ」から始めてください。"}</small>
+        </label>` : `<div class="field"><span>検知方式</span><small>登録した語句との一致で判定するため、感度の選択はありません。</small></div>`}
         <label class="field">
           <span>処罰内容</span>
           <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="action">
-            ${GUARD_MODERATION_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
+            ${state.guard.moderationCatalog.actions.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
           </select>
         </label>
-        ${isTextFilterFeature ? renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.target_channel_ids, guild) : ""}
+        ${isPaceFeature ? renderGuardModerationRuleDetails(feature.id, normalized.level) : ""}
+        ${renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.ignored_channel_ids, guild)}
+        <details class="guard-moderation-advanced">
+          <summary>この検知だけの信頼リスト</summary>
+          <p>サーバー共通リストに加え、この検知だけ除外したいIDを追加します。</p>
+          ${GUARD_MODERATION_TRUST_FIELDS.map((field) => renderGuardModerationIdListField(feature.id, field, normalized[field.id])).join("")}
+        </details>
         ${isNgWordFeature ? renderGuardModerationNgWordsField(feature.id, normalized.ng_words) : ""}
       </div>
     </article>
@@ -7918,7 +8081,7 @@ function renderGuardRisk() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>参加者のアカウント年齢、招待元、Guardが観測した他サーバーのBAN・キック・荒らし検知を使って0〜100%で判定します。未観測の情報を推測して処置することはありません。</span>
+        ${icon("shield")}<span>アカウント年齢、アイコン・表示名、ユーザー名の生成パターン、招待リンクの参加増加、招待元、Guardが観測した他サーバーの処分歴を組み合わせて0〜100%で判定します。DiscordのBot APIから取得できない自己紹介は判定対象外で、未観測の情報は推測しません。</span>
       </div>
       ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
       ${state.guard.riskError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.riskError)}</span></p>` : ""}
@@ -8218,6 +8381,9 @@ function activeGuardSelectedGuild() {
   const featureId = activeGuardFeature().id;
   if (featureId === "audit-log") {
     return selectedAuditGuild("guard");
+  }
+  if (featureId === "abuse-registry") {
+    return null;
   }
   if (featureId === "invitation") {
     return guardInvitationSelectedGuild();
@@ -8530,7 +8696,7 @@ async function saveGuardInvitationSettings() {
 function updateGuardModerationField(target, options = { renderAfter: true }) {
   const featureId = target.dataset.guardModerationFeature;
   const field = target.dataset.guardModerationField;
-  if (!featureId || !field || !GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
+  if (!featureId || !field || !guardModerationFeatureDefinitions().some((feature) => feature.id === featureId)) {
     return;
   }
   const form = normalizeGuardModerationForm(state.guard.moderationForm);
@@ -8562,8 +8728,8 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
     form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
       ...currentFeature,
       all_channels_enabled: true,
-      target_channel_ids: normalizeGuardModerationChannelIds([
-        ...currentFeature.target_channel_ids,
+      ignored_channel_ids: normalizeGuardModerationChannelIds([
+        ...currentFeature.ignored_channel_ids,
         channelId,
       ]),
     });
@@ -8590,7 +8756,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
         : field === "target_channel_ids"
           ? normalizeGuardModerationChannelIds(value)
         : value,
-    ...(field === "target_channel_ids" ? { all_channels_enabled: true } : {}),
+    ...(field === "target_channel_ids" ? { ignored_channel_ids: value, all_channels_enabled: true } : {}),
   });
   state.guard.moderationForm = form;
   state.guard.moderationError = null;
@@ -8601,7 +8767,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
 }
 
 function removeGuardModerationTargetChannel(featureId, channelId) {
-  if (!GUARD_MODERATION_FEATURES.some((feature) => feature.id === featureId)) {
+  if (!guardModerationFeatureDefinitions().some((feature) => feature.id === featureId)) {
     return;
   }
   const normalizedChannelId = String(channelId ?? "").trim();
@@ -8612,7 +8778,7 @@ function removeGuardModerationTargetChannel(featureId, channelId) {
   const currentFeature = normalizeGuardModerationFeatureSettings(featureId, form.features[featureId]);
   form.features[featureId] = normalizeGuardModerationFeatureSettings(featureId, {
     ...currentFeature,
-    target_channel_ids: currentFeature.target_channel_ids.filter((item) => item !== normalizedChannelId),
+    ignored_channel_ids: currentFeature.ignored_channel_ids.filter((item) => item !== normalizedChannelId),
   });
   state.guard.moderationForm = form;
   state.guard.moderationError = null;
@@ -8692,7 +8858,7 @@ async function saveGuardModerationSettings() {
   try {
     const payload = await guardFetchJson(guardApiUrl("/moderation/settings"), {
       method: "POST",
-      body: JSON.stringify({ settings: form }),
+      body: JSON.stringify({ settings: guardModerationPayload(form) }),
     });
     if (!guardSessionIsCurrent(guardSession)) {
       return false;
@@ -8881,6 +9047,517 @@ function guardGuildName(value) {
 function guardText(value, fallback = "未取得") {
   const text = String(value ?? "").trim();
   return text || fallback;
+}
+
+function normalizeGuardAbuseRegistry(payload) {
+  const normalizeEvidence = (value) => Array.isArray(value)
+    ? value.map((item) => ({
+        type: String(item?.type ?? "link"),
+        guild_id: String(item?.guild_id ?? ""),
+        channel_id: String(item?.channel_id ?? ""),
+        message_id: String(item?.message_id ?? ""),
+        url: String(item?.url ?? ""),
+        note: String(item?.note ?? ""),
+        observed_at: String(item?.observed_at ?? ""),
+        sha256: String(item?.sha256 ?? ""),
+      })).filter((item) => item.url || item.note || item.guild_id || item.channel_id || item.message_id || item.observed_at || item.sha256)
+    : [];
+  const cases = Array.isArray(payload?.cases) ? payload.cases.map((item) => ({
+    id: String(item?.id ?? item?.case_id ?? ""),
+    source_guild_id: String(item?.source_guild_id ?? ""),
+    subject_user_id: String(item?.subject_user_id ?? ""),
+    reason_code: String(item?.reason_code ?? "other"),
+    reason_text: String(item?.reason_text ?? ""),
+    status: String(item?.status ?? "pending"),
+    evidence: normalizeEvidence(item?.evidence),
+    reported_alt_user_ids: normalizeGuardModerationIds(item?.reported_alt_user_ids ?? item?.alt_user_ids),
+    approved_alt_user_ids: normalizeGuardModerationIds(item?.approved_alt_user_ids ?? item?.alt_user_ids),
+    created_at: item?.created_at ?? null,
+    updated_at: item?.updated_at ?? null,
+    expires_at: item?.expires_at ?? null,
+    review_reason: String(item?.review_reason ?? item?.decision_reason ?? ""),
+    can_appeal: item?.can_appeal === true,
+  })).filter((item) => item.id) : [];
+  const appeals = Array.isArray(payload?.appeals) ? payload.appeals.map((item) => ({
+    id: String(item?.id ?? item?.appeal_id ?? ""),
+    case_id: String(item?.case_id ?? ""),
+    reason_text: String(item?.reason_text ?? ""),
+    status: String(item?.status ?? item?.decision ?? "pending"),
+    review_reason: String(item?.review_reason ?? ""),
+    created_at: item?.created_at ?? null,
+  })).filter((item) => item.id) : [];
+  const reasonCodes = Array.isArray(payload?.reason_codes) ? payload.reason_codes.map((item) =>
+    typeof item === "string"
+      ? { id: item, label: item, description: "" }
+      : {
+          id: String(item?.id ?? item?.code ?? ""),
+          label: String(item?.label ?? item?.name ?? item?.id ?? item?.code ?? ""),
+          description: String(item?.description ?? ""),
+        },
+  ).filter((item) => item.id) : [];
+  return {
+    cases,
+    appeals,
+    stats: isObject(payload?.stats) ? payload.stats : {},
+    is_owner: payload?.is_owner === true,
+    actor_user_id: String(payload?.actor_user_id ?? ""),
+    reason_codes: reasonCodes,
+  };
+}
+
+async function loadGuardAbuseRegistry(options = {}) {
+  const registry = state.guard.abuseRegistry;
+  if (!state.guard.apiBase || !getAuthToken() || registry.loading || (registry.loaded && !options.force)) {
+    return false;
+  }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    return false;
+  }
+  registry.loading = true;
+  registry.error = null;
+  if (options.renderAfter !== false) {
+    render();
+  }
+  try {
+    const payload = normalizeGuardAbuseRegistry(await guardFetchJson(guardApiUrl("/abuse-registry/cases")));
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
+    state.guard.abuseRegistry = {
+      ...state.guard.abuseRegistry,
+      ...payload,
+      loaded: true,
+      loading: false,
+      error: null,
+    };
+    return true;
+  } catch (error) {
+    if (guardSessionIsCurrent(guardSession)) {
+      registry.error = error instanceof Error ? error.message : String(error);
+    }
+    return false;
+  } finally {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.abuseRegistry.loading = false;
+      if (options.renderAfter !== false) {
+        render();
+      }
+    }
+  }
+}
+
+function guardRegistryIdempotencyKey(prefix) {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+async function mutateGuardAbuseRegistry(path, body, successMessage) {
+  const registry = state.guard.abuseRegistry;
+  if (registry.saving) {
+    return false;
+  }
+  registry.saving = true;
+  registry.error = null;
+  registry.message = null;
+  render();
+  try {
+    await guardFetchJson(guardApiUrl(path), { method: "POST", body: JSON.stringify(body) });
+    registry.message = successMessage;
+    registry.loaded = false;
+    await loadGuardAbuseRegistry({ force: true, renderAfter: false });
+    return true;
+  } catch (error) {
+    registry.error = error instanceof Error ? error.message : String(error);
+    return false;
+  } finally {
+    state.guard.abuseRegistry.saving = false;
+    render();
+  }
+}
+
+function guardAbuseStatusLabel(status) {
+  return ({ pending: "審査待ち", approved: "承認済み", rejected: "却下", revoked: "取消済み", expired: "期限切れ", accepted: "受理" })[status] ?? status;
+}
+
+function renderGuardAbuseRegistry() {
+  const registry = state.guard.abuseRegistry;
+  const guilds = guardConfigurableGuilds();
+  return `
+    ${renderGuardApiNotice()}
+    <section class="settings-panel guard-abuse-registry" id="guard-abuse-registry-settings">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("alert")}<h2>荒らし登録</h2></div>
+        <button class="icon-button icon-button--ghost" type="button" data-action="refresh-guard-abuse-registry" ${registry.loading ? "disabled" : ""}>${icon("refresh")}<span>${registry.loading ? "読込中" : "更新"}</span></button>
+      </div>
+      <div class="status-banner guard-privacy-note">
+        ${icon("shield")}<span>報告だけでは全体拒否になりません。証拠をGuardオーナーが確認し、承認したユーザーIDと承認済みの別アカウントだけがGuard導入サーバーで拒否対象になります。</span>
+      </div>
+      <p class="guard-inline-hint">端末識別情報や非公開の照合値は、この画面には表示されません。誤りがある場合は各案件から異議申し立てができます。</p>
+      ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
+      ${registry.message ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(registry.message)}</span></p>` : ""}
+      ${registry.loading && !registry.loaded ? `<div class="empty-state">荒らし登録を読み込んでいます…</div>` : `
+        ${renderGuardAbuseReportForm(guilds, registry)}
+        ${registry.is_owner ? renderGuardAbuseOwnerQueue(registry) : ""}
+        ${renderGuardAbuseCases(registry)}
+      `}
+    </section>
+  `;
+}
+
+function renderGuardAbuseReportForm(guilds, registry) {
+  const reasons = registry.reason_codes.length ? registry.reason_codes : [{ id: "other", label: "その他", description: "" }];
+  return `
+    <article class="feature-card guard-registry-report">
+      <div class="feature-card__header"><div class="panel-heading">${icon("message")}<h2>新しい報告</h2></div></div>
+      <p>実際に確認できる証拠を添えてください。憶測だけの報告や、嫌がらせ目的の登録は禁止です。</p>
+      <form class="settings-grid guard-registry-form" data-guard-abuse-report-form>
+        <label class="field"><span>発生したサーバー</span><select name="source_guild_id" required>${guilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${guild.id === activeGuardSelectedGuild()?.id ? "selected" : ""}>${escapeHtml(guild.name)}</option>`).join("")}</select></label>
+        <label class="field"><span>対象ユーザーID</span><input name="subject_user_id" inputmode="numeric" pattern="[0-9]{15,22}" required placeholder="123456789012345678" /></label>
+        <label class="field"><span>理由</span><select name="reason_code" required>${reasons.map((reason) => `<option value="${escapeAttribute(reason.id)}">${escapeHtml(reason.label)}</option>`).join("")}</select></label>
+        <label class="field guard-registry-wide"><span>何が起きたか</span><textarea name="reason_text" maxlength="2000" required placeholder="日時、行為、影響を具体的に記入"></textarea></label>
+        <label class="field guard-registry-wide"><span>証拠URL（1行に1件）</span><textarea name="evidence_urls" maxlength="20000" required placeholder="https://discord.com/channels/...&#10;https://example.com/evidence"></textarea><small>最大20件・1件1,000文字。Discordメッセージリンクや、権限のある人が確認できる資料を記入してください。</small></label>
+        <label class="field guard-registry-wide"><span>証拠の補足メモ</span><textarea name="evidence_note" maxlength="1000" placeholder="URLの内容や確認方法"></textarea></label>
+        <label class="field guard-registry-wide"><span>把握している別アカウントID（任意）</span><textarea name="reported_alt_user_ids" maxlength="2000" placeholder="1行に1 ID"></textarea><small>最大20件。関連を説明できるものだけを報告してください。承認前は拒否対象になりません。</small></label>
+        <div class="guard-registry-confirm"><label><input type="checkbox" name="confirmed" required /> 内容が事実に基づき、虚偽報告ではないことを確認しました</label></div>
+        <button class="icon-button icon-button--primary" type="submit" ${registry.saving || !guilds.length ? "disabled" : ""}>${icon("shield")}<span>審査へ送る</span></button>
+      </form>
+    </article>
+  `;
+}
+
+function renderGuardAbuseOwnerQueue(registry) {
+  const pending = registry.cases.filter((item) => item.status === "pending");
+  const appeals = registry.appeals.filter((item) => item.status === "pending");
+  return `
+    <article class="feature-card guard-registry-owner">
+      <div class="feature-card__header"><div class="panel-heading">${icon("lock")}<h2>Guardオーナー審査</h2></div><span class="feature-status ${pending.length + appeals.length ? "feature-status--on" : ""}">${pending.length + appeals.length}件</span></div>
+      <p>承認するとGuard全体の拒否対象になります。証拠と対象IDを再確認し、判断理由を必ず残してください。</p>
+      ${appeals.length ? `<h3>異議申し立て</h3>${appeals.map(renderGuardAbuseAppealCard).join("")}` : `<p class="guard-inline-hint">審査待ちの異議申し立てはありません。</p>`}
+    </article>
+  `;
+}
+
+function renderGuardAbuseCases(registry) {
+  return `
+    <div class="guard-registry-list">
+      <div class="settings-panel__header"><div class="panel-heading">${icon("history")}<h2>${registry.is_owner ? "登録案件" : "報告した案件"}</h2></div><span>${registry.cases.length}件</span></div>
+      ${registry.cases.length ? registry.cases.map((item) => renderGuardAbuseCaseCard(item, registry)).join("") : `<div class="empty-state">表示できる案件はありません。</div>`}
+    </div>
+  `;
+}
+
+function renderGuardAbuseCaseCard(item, registry) {
+  const evidence = item.evidence.map((entry) => {
+    const safeUrl = guardSafeEvidenceUrl(entry.url);
+    const references = [
+      entry.guild_id ? `Guild ${entry.guild_id}` : "",
+      entry.channel_id ? `Channel ${entry.channel_id}` : "",
+      entry.message_id ? `Message ${entry.message_id}` : "",
+      entry.observed_at ? `確認時刻 ${entry.observed_at}` : "",
+      entry.sha256 ? `SHA-256 ${entry.sha256}` : "",
+    ].filter(Boolean).map(escapeHtml).join(" / ");
+    return `<li>${safeUrl ? `<a href="${escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(entry.type || "証拠リンク")}</a>` : `<span>${escapeHtml(entry.type || "証拠")}</span>`}${entry.note ? ` — ${escapeHtml(entry.note)}` : ""}${references ? `<small>${references}</small>` : ""}</li>`;
+  }).join("");
+  const canAppeal = !registry.is_owner && item.can_appeal && item.status === "approved" && !registry.appeals.some((appeal) => appeal.case_id === item.id && appeal.status === "pending");
+  return `
+    <article class="feature-card guard-registry-case">
+      <div class="feature-card__header"><div><strong>対象: ${escapeHtml(item.subject_user_id)}</strong><small>案件 ${escapeHtml(item.id)}</small></div><span class="feature-status ${item.status === "approved" ? "feature-status--on" : ""}">${escapeHtml(guardAbuseStatusLabel(item.status))}</span></div>
+      <dl class="guard-registry-facts"><div><dt>理由</dt><dd>${escapeHtml(item.reason_code)}</dd></div><div><dt>報告サーバー</dt><dd>${escapeHtml(item.source_guild_id)}</dd></div><div><dt>報告日時</dt><dd>${escapeHtml(formatDateTime(item.created_at))}</dd></div>${item.expires_at ? `<div><dt>有効期限</dt><dd>${escapeHtml(formatDateTime(item.expires_at))}</dd></div>` : ""}</dl>
+      <p>${escapeHtml(item.reason_text || "説明なし")}</p>
+      ${evidence ? `<details><summary>証拠 ${item.evidence.length}件</summary><ul>${evidence}</ul></details>` : ""}
+      ${(item.approved_alt_user_ids.length || item.reported_alt_user_ids.length) ? `<p><strong>別アカウントID:</strong> ${[...new Set([...item.approved_alt_user_ids, ...item.reported_alt_user_ids])].map(escapeHtml).join(", ")}</p>` : ""}
+      ${item.review_reason ? `<p class="guard-inline-hint">審査理由: ${escapeHtml(item.review_reason)}</p>` : ""}
+      ${registry.is_owner ? renderGuardAbuseOwnerCaseActions(item, registry) : ""}
+      ${canAppeal ? `<form class="guard-registry-inline-form" data-guard-abuse-appeal-form data-case-id="${escapeAttribute(item.id)}"><textarea name="reason_text" maxlength="2000" required placeholder="判断が誤っている理由と確認できる情報"></textarea><button class="icon-button icon-button--ghost" type="submit" ${registry.saving ? "disabled" : ""}>異議申し立て</button></form>` : ""}
+    </article>
+  `;
+}
+
+function renderGuardAbuseOwnerCaseActions(item, registry) {
+  return `
+    <div class="guard-registry-review" data-case-id="${escapeAttribute(item.id)}">
+      <label class="field"><span>判断理由</span><input data-registry-review-reason="${escapeAttribute(item.id)}" maxlength="1000" placeholder="承認・却下・取消の根拠" /></label>
+      ${item.status === "pending" ? `${item.reported_alt_user_ids.length ? `<fieldset class="field guard-registry-alt-approval"><legend>承認する別アカウント</legend><small>報告されたIDを確認し、関連を承認できるものだけ選択してください。初期状態では選択されません。</small>${item.reported_alt_user_ids.map((id) => `<label class="guard-registry-confirm"><input type="checkbox" value="${escapeAttribute(id)}" data-registry-approved-alt="${escapeAttribute(item.id)}" /> ${escapeHtml(id)}</label>`).join("")}</fieldset>` : ""}<label class="guard-registry-confirm"><input type="checkbox" data-registry-capture-fingerprints="${escapeAttribute(item.id)}" /> 既存の照合情報を承認済み関連情報として保存する</label><label class="field"><span>有効期限（任意）</span><input type="datetime-local" data-registry-expires-at="${escapeAttribute(item.id)}" /></label><div class="feature-card__actions"><button class="icon-button icon-button--primary" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="approve" ${registry.saving ? "disabled" : ""}>承認</button><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="reject" ${registry.saving ? "disabled" : ""}>却下</button></div>` : ""}
+      ${item.status === "approved" ? `<div class="feature-card__actions"><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="revoke" ${registry.saving ? "disabled" : ""}>登録を取り消す</button></div><label class="field"><span>追加する別アカウントID</span><input data-registry-alt-id="${escapeAttribute(item.id)}" inputmode="numeric" placeholder="DiscordユーザーID" /></label><div class="feature-card__actions"><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="add_alt">別アカウントを追加</button></div>${item.approved_alt_user_ids.map((id) => `<button class="guard-moderation-channel-chip" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="remove_alt" data-alt-id="${escapeAttribute(id)}"><span>${escapeHtml(id)}</span>${icon("trash")}</button>`).join("")}` : ""}
+    </div>
+  `;
+}
+
+function renderGuardAbuseAppealCard(appeal) {
+  return `<div class="guard-registry-appeal"><p><strong>案件 ${escapeHtml(appeal.case_id)}</strong> — ${escapeHtml(appeal.reason_text)}</p><label class="field"><span>回答理由</span><input data-registry-appeal-reason="${escapeAttribute(appeal.id)}" maxlength="1000" /></label><div class="feature-card__actions"><button class="icon-button icon-button--primary" type="button" data-action="review-guard-abuse-appeal" data-appeal-id="${escapeAttribute(appeal.id)}" data-appeal-decision="accept">受理</button><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-appeal" data-appeal-id="${escapeAttribute(appeal.id)}" data-appeal-decision="reject">棄却</button></div></div>`;
+}
+
+function guardSafeEvidenceUrl(value) {
+  try {
+    const url = new URL(String(value ?? ""));
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+async function submitGuardAbuseReport(formElement) {
+  const data = new FormData(formElement);
+  const sourceGuildId = String(data.get("source_guild_id") ?? "");
+  const subjectUserId = normalizeGuardModerationIds(data.get("subject_user_id"))[0] ?? "";
+  const reasonText = String(data.get("reason_text") ?? "").trim();
+  const rawEvidenceUrls = String(data.get("evidence_urls") ?? "").split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+  const reportedAltUserIds = normalizeGuardModerationIds(data.get("reported_alt_user_ids"));
+  if (rawEvidenceUrls.length > 20 || rawEvidenceUrls.some((url) => url.length > 1000) || reportedAltUserIds.length > 20) {
+    state.guard.abuseRegistry.error = "証拠URLと別アカウントIDは各20件まで、証拠URLは1件1,000文字までです。";
+    render();
+    return;
+  }
+  const evidenceUrls = rawEvidenceUrls.map(guardSafeEvidenceUrl).filter(Boolean);
+  if (evidenceUrls.length !== rawEvidenceUrls.length) {
+    state.guard.abuseRegistry.error = "証拠URLは有効なHTTP(S) URLを1行に1件ずつ入力してください。";
+    render();
+    return;
+  }
+  if (!guardConfigurableGuilds().some((guild) => guild.id === sourceGuildId) || !subjectUserId || !reasonText || !evidenceUrls.length || data.get("confirmed") !== "on") {
+    state.guard.abuseRegistry.error = "サーバー、対象ユーザーID、具体的な理由、有効な証拠URL、確認チェックを入力してください。";
+    render();
+    return;
+  }
+  if (!window.confirm("この内容をGuardオーナーの審査へ送ります。虚偽報告でないことをもう一度確認してください。")) {
+    return;
+  }
+  const note = String(data.get("evidence_note") ?? "").trim();
+  await mutateGuardAbuseRegistry("/abuse-registry/cases", {
+    source_guild_id: sourceGuildId,
+    subject_user_id: subjectUserId,
+    reason_code: String(data.get("reason_code") ?? "other"),
+    reason_text: reasonText,
+    evidence: evidenceUrls.map((url) => ({ type: "message_link", url, note })),
+    reported_alt_user_ids: reportedAltUserIds,
+    idempotency_key: guardRegistryIdempotencyKey("case"),
+  }, "荒らし報告を審査へ送りました。承認されるまでは全体拒否に反映されません。");
+}
+
+async function submitGuardAbuseAppeal(formElement) {
+  const caseId = String(formElement.dataset.caseId ?? "");
+  const data = new FormData(formElement);
+  const reasonText = String(data.get("reason_text") ?? "").trim();
+  if (!caseId || !reasonText) {
+    state.guard.abuseRegistry.error = "異議申し立ての理由を入力してください。";
+    render();
+    return;
+  }
+  await mutateGuardAbuseRegistry("/abuse-registry/appeals", {
+    case_id: caseId,
+    reason_text: reasonText,
+    idempotency_key: guardRegistryIdempotencyKey("appeal"),
+  }, "異議申し立てを送信しました。");
+}
+
+async function reviewGuardAbuseCase(actionElement) {
+  if (!state.guard.abuseRegistry.is_owner) {
+    return;
+  }
+  const caseId = String(actionElement.dataset.caseId ?? "");
+  const action = String(actionElement.dataset.reviewAction ?? "");
+  const allowed = ["approve", "reject", "revoke", "add_alt", "remove_alt"];
+  if (!caseId || !allowed.includes(action)) {
+    return;
+  }
+  const reasonInput = document.querySelector(`[data-registry-review-reason="${CSS.escape(caseId)}"]`);
+  const reason = reasonInput instanceof HTMLInputElement ? reasonInput.value.trim() : "";
+  if (!reason) {
+    state.guard.abuseRegistry.error = "審査・変更の理由を入力してください。";
+    render();
+    return;
+  }
+  const altInput = document.querySelector(`[data-registry-alt-id="${CSS.escape(caseId)}"]`);
+  const altUserId = action === "remove_alt"
+    ? String(actionElement.dataset.altId ?? "")
+    : normalizeGuardModerationIds(altInput instanceof HTMLInputElement ? altInput.value : "")[0] ?? "";
+  if (["add_alt", "remove_alt"].includes(action) && !altUserId) {
+    state.guard.abuseRegistry.error = "別アカウントのDiscordユーザーIDを入力してください。";
+    render();
+    return;
+  }
+  const labels = { approve: "承認して全体拒否へ反映", reject: "報告を却下", revoke: "承認済み登録を取消", add_alt: "別アカウントを追加", remove_alt: "別アカウントを削除" };
+  if (!window.confirm(`${labels[action]}します。対象と証拠を確認しましたか？`)) {
+    return;
+  }
+  const body = { action, reason };
+  if (action === "approve") {
+    const capture = document.querySelector(`[data-registry-capture-fingerprints="${CSS.escape(caseId)}"]`);
+    const expires = document.querySelector(`[data-registry-expires-at="${CSS.escape(caseId)}"]`);
+    body.alt_user_ids = [...document.querySelectorAll(`[data-registry-approved-alt="${CSS.escape(caseId)}"]:checked`)]
+      .map((input) => input instanceof HTMLInputElement ? input.value : "")
+      .filter(Boolean);
+    body.capture_existing_fingerprints = capture instanceof HTMLInputElement && capture.checked;
+    if (expires instanceof HTMLInputElement && expires.value) {
+      body.expires_at = new Date(expires.value).toISOString();
+    }
+  } else if (["add_alt", "remove_alt"].includes(action)) {
+    body.alt_user_id = altUserId;
+  }
+  await mutateGuardAbuseRegistry(`/abuse-registry/cases/${encodeURIComponent(caseId)}/review`, body, `${labels[action]}しました。`);
+}
+
+async function reviewGuardAbuseAppeal(actionElement) {
+  if (!state.guard.abuseRegistry.is_owner) {
+    return;
+  }
+  const appealId = String(actionElement.dataset.appealId ?? "");
+  const decision = String(actionElement.dataset.appealDecision ?? "");
+  const reasonInput = document.querySelector(`[data-registry-appeal-reason="${CSS.escape(appealId)}"]`);
+  const reviewReason = reasonInput instanceof HTMLInputElement ? reasonInput.value.trim() : "";
+  if (!appealId || !["accept", "reject"].includes(decision) || !reviewReason) {
+    state.guard.abuseRegistry.error = "異議申し立てへの回答理由を入力してください。";
+    render();
+    return;
+  }
+  if (!window.confirm(`異議申し立てを${decision === "accept" ? "受理" : "棄却"}します。よろしいですか？`)) {
+    return;
+  }
+  await mutateGuardAbuseRegistry(`/abuse-registry/appeals/${encodeURIComponent(appealId)}/review`, {
+    decision,
+    review_reason: reviewReason,
+  }, `異議申し立てを${decision === "accept" ? "受理" : "棄却"}しました。`);
+}
+
+function addGuardModerationTrustId(scope, fieldId) {
+  if (!GUARD_MODERATION_TRUST_FIELDS.some((field) => field.id === fieldId)) {
+    return;
+  }
+  const input = document.querySelector(`[data-guard-trust-input="${CSS.escape(`${scope}:${fieldId}`)}"]`);
+  const additions = normalizeGuardModerationIds(input instanceof HTMLInputElement ? input.value : "");
+  if (!additions.length) {
+    state.guard.moderationError = "DiscordのIDを数字で入力してください。";
+    render();
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  if (scope === "guild") {
+    form[fieldId] = normalizeGuardModerationIds([...form[fieldId], ...additions]);
+  } else if (form.features[scope]) {
+    form.features[scope] = normalizeGuardModerationFeatureSettings(scope, {
+      ...form.features[scope],
+      [fieldId]: [...form.features[scope][fieldId], ...additions],
+    });
+  } else {
+    return;
+  }
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
+}
+
+function removeGuardModerationTrustId(scope, fieldId, id) {
+  if (!GUARD_MODERATION_TRUST_FIELDS.some((field) => field.id === fieldId)) {
+    return;
+  }
+  const normalizedId = String(id ?? "");
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  if (scope === "guild") {
+    form[fieldId] = form[fieldId].filter((item) => item !== normalizedId);
+  } else if (form.features[scope]) {
+    form.features[scope] = normalizeGuardModerationFeatureSettings(scope, {
+      ...form.features[scope],
+      [fieldId]: form.features[scope][fieldId].filter((item) => item !== normalizedId),
+    });
+  } else {
+    return;
+  }
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  render();
+}
+
+function renderGuardModerationIdListField(scope, field, values) {
+  const ids = normalizeGuardModerationIds(values);
+  const inputId = `guard-trust-${scope}-${field.id}`;
+  return `
+    <div class="field guard-moderation-channel-field guard-moderation-id-field">
+      <span>${escapeHtml(field.label)}</span>
+      <div class="guard-moderation-add-list auto-rules">
+        <div class="auto-rules__header">
+          <input id="${escapeAttribute(inputId)}" type="text" inputmode="numeric" data-guard-trust-input="${escapeAttribute(scope)}:${escapeAttribute(field.id)}" placeholder="Discordの${escapeAttribute(field.singular)}ID" />
+          <button class="icon-button icon-button--ghost" type="button" data-action="add-guard-moderation-trust-id" data-guard-trust-scope="${escapeAttribute(scope)}" data-guard-trust-field="${escapeAttribute(field.id)}">
+            ${icon("plus")}<span>追加</span>
+          </button>
+        </div>
+      </div>
+      <div class="guard-moderation-channel-list" role="list">
+        ${ids.length
+          ? ids.map((id) => `
+            <button class="guard-moderation-channel-chip" type="button" data-action="remove-guard-moderation-trust-id" data-guard-trust-scope="${escapeAttribute(scope)}" data-guard-trust-field="${escapeAttribute(field.id)}" data-guard-trust-id="${escapeAttribute(id)}" title="信頼リストから外す">
+              <span>${escapeHtml(id)}</span>${icon("trash")}
+            </button>
+          `).join("")
+          : `<span class="guard-moderation-channel-empty">未登録</span>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderGuardModerationRuleDetails(featureId, selectedLevel) {
+  const prefixes = GUARD_MODERATION_RULE_PREFIXES[featureId] ?? [];
+  const levels = state.guard.moderationCatalog.levels;
+  const rules = state.guard.moderationCatalog.rules;
+  if (!prefixes.length || !levels.length || !isObject(rules)) {
+    return "";
+  }
+  const rows = levels.map((level) => {
+    const values = isObject(rules[level.id]) ? rules[level.id] : {};
+    const entries = Object.entries(values).filter(([key, value]) =>
+      prefixes.some((prefix) => key.startsWith(prefix)) && Number.isFinite(Number(value)),
+    );
+    if (!entries.length) {
+      return "";
+    }
+    return `
+      <div class="guard-rule-level ${level.id === selectedLevel ? "guard-rule-level--selected" : ""}">
+        <strong>${escapeHtml(level.label)}${level.id === selectedLevel ? "（選択中）" : ""}</strong>
+        <span>${entries.map(([key, value]) => `${escapeHtml(guardModerationRuleLabel(key))}: ${escapeHtml(guardModerationRuleValue(key, value))}`).join(" / ")}</span>
+      </div>
+    `;
+  }).filter(Boolean);
+  return rows.length ? `
+    <div class="field guard-moderation-rule-details">
+      <span>実際の検知条件</span>
+      <small>「時間内の回数が上限以上」になると検知します。短時間・低い上限ほど厳しい設定です。</small>
+      ${rows.join("")}
+    </div>
+  ` : "";
+}
+
+function guardModerationRuleLabel(key) {
+  if (key.endsWith("_burst_window")) return "瞬間監視時間";
+  if (key.endsWith("_duplicate_window")) return "同文監視時間";
+  if (key.endsWith("_slow_window")) return "ゆっくり連投の監視時間";
+  if (key.endsWith("_window")) return "監視時間";
+  if (key.endsWith("_burst_limit")) return "瞬間上限";
+  if (key.endsWith("_duplicate_limit")) return "同文上限";
+  if (key.endsWith("_similar_limit")) return "類似文上限";
+  if (key.endsWith("_cross_channel_limit")) return "複数チャンネル上限";
+  if (key.endsWith("_message_limit")) return "メッセージ上限";
+  if (key.endsWith("_slow_limit")) return "ゆっくり連投上限";
+  if (key.endsWith("_limit")) return "回数上限";
+  return key;
+}
+
+function guardModerationPayload(form) {
+  const normalized = normalizeGuardModerationForm(form);
+  return {
+    guild_id: normalized.guild_id,
+    ...Object.fromEntries(GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, normalized[field.id]])),
+    features: Object.fromEntries(Object.entries(normalized.features).map(([featureId, settings]) => {
+      const { target_channel_ids: _legacyTargetChannelIds, ...canonical } = settings;
+      return [featureId, canonical];
+    })),
+  };
+}
+
+function guardModerationRuleValue(key, value) {
+  const numeric = Number(value);
+  return key.includes("window") ? `${numeric}秒` : `${numeric}回`;
 }
 
 function renderAuditLogPanel(productId) {
@@ -12011,7 +12688,14 @@ function requestGuardGuildChange(guildId) {
 }
 
 function loadActiveGuardFeatureData() {
-  if (state.activeProduct !== "guard" || activeGuardFeature().id !== "audit-log") {
+  if (state.activeProduct !== "guard") {
+    return;
+  }
+  if (activeGuardFeature().id === "abuse-registry") {
+    void loadGuardAbuseRegistry();
+    return;
+  }
+  if (activeGuardFeature().id !== "audit-log") {
     return;
   }
   const guildId = selectedAuditGuildId("guard");
@@ -12069,7 +12753,7 @@ function loadActivePageData() {
 async function saveActiveSettings() {
   if (state.activeProduct === "guard") {
     const featureId = activeGuardFeature().id;
-    if (featureId === "audit-log" || featureId === "admin") {
+    if (featureId === "audit-log" || featureId === "admin" || featureId === "abuse-registry") {
       return true;
     }
     if (featureId === "invitation") {
@@ -12152,6 +12836,12 @@ function handleSubmit(event) {
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-moderation-form]")) {
     event.preventDefault();
     void saveGuardModerationSettings();
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-report-form]")) {
+    event.preventDefault();
+    void submitGuardAbuseReport(target);
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-appeal-form]")) {
+    event.preventDefault();
+    void submitGuardAbuseAppeal(target);
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-logging-form]")) {
     event.preventDefault();
     void saveGuardLoggingSettings();
@@ -12275,8 +12965,19 @@ function handleClick(event) {
       void saveGuardInvitationSettings();
     } else if (action === "save-guard-moderation-settings") {
       void saveGuardModerationSettings();
+    } else if (action === "refresh-guard-abuse-registry") {
+      state.guard.abuseRegistry.loaded = false;
+      void loadGuardAbuseRegistry({ force: true });
+    } else if (action === "review-guard-abuse-case") {
+      void reviewGuardAbuseCase(actionEl);
+    } else if (action === "review-guard-abuse-appeal") {
+      void reviewGuardAbuseAppeal(actionEl);
     } else if (action === "remove-guard-moderation-channel") {
       removeGuardModerationTargetChannel(actionEl.dataset.guardModerationFeature, actionEl.dataset.channelId);
+    } else if (action === "add-guard-moderation-trust-id") {
+      addGuardModerationTrustId(actionEl.dataset.guardTrustScope, actionEl.dataset.guardTrustField);
+    } else if (action === "remove-guard-moderation-trust-id") {
+      removeGuardModerationTrustId(actionEl.dataset.guardTrustScope, actionEl.dataset.guardTrustField, actionEl.dataset.guardTrustId);
     } else if (action === "add-guard-moderation-ng-word") {
       addGuardModerationNgWord(actionEl.dataset.guardModerationFeature);
     } else if (action === "remove-guard-moderation-ng-word") {

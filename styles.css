@@ -6959,6 +6959,134 @@ input[type="checkbox"]:checked::before {
   }
 }
 
+.guard-moderation-trust-card {
+  margin-bottom: 18px;
+}
+
+.guard-moderation-advanced,
+.guard-moderation-rule-details,
+.guard-registry-case details {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.22);
+}
+
+.guard-moderation-advanced summary,
+.guard-registry-case summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.guard-moderation-advanced > p,
+.guard-moderation-rule-details > small {
+  display: block;
+  margin: 6px 0 10px;
+  color: var(--muted);
+}
+
+.guard-rule-level {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.guard-rule-level--selected {
+  outline: 1px solid var(--purple);
+  background: rgba(99, 102, 241, 0.12);
+}
+
+.guard-rule-level span {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.guard-abuse-registry,
+.guard-registry-list {
+  display: grid;
+  gap: 16px;
+}
+
+.guard-registry-report,
+.guard-registry-owner,
+.guard-registry-case {
+  display: grid;
+  gap: 12px;
+}
+
+.guard-registry-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.guard-registry-wide,
+.guard-registry-confirm,
+.guard-registry-form > button {
+  grid-column: 1 / -1;
+}
+
+.guard-registry-form textarea,
+.guard-registry-inline-form textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.guard-registry-confirm {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.guard-registry-confirm label,
+label.guard-registry-confirm {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.guard-registry-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.guard-registry-facts div {
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.guard-registry-facts dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.guard-registry-facts dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.guard-registry-review,
+.guard-registry-appeal,
+.guard-registry-inline-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.08);
+}
+
+@media (max-width: 720px) {
+  .guard-registry-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .guest-portal .login-panel__actions .icon-button--primary {
   display: grid;
   grid-template-columns: auto minmax(0, auto);
