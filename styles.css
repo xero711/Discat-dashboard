@@ -4101,6 +4101,10 @@ input[type="checkbox"]:checked::before {
   backdrop-filter: blur(18px);
 }
 
+.login-panel > * {
+  min-width: 0;
+}
+
 .connection-loading-stage {
   min-height: calc(100vh - 120px);
   min-height: calc(100svh - 120px);
@@ -4164,6 +4168,7 @@ input[type="checkbox"]:checked::before {
   position: relative;
   display: grid;
   width: min(100%, 520px);
+  min-width: 0;
   min-height: 410px;
   place-items: center;
   align-content: center;
@@ -4216,6 +4221,8 @@ input[type="checkbox"]:checked::before {
 .connection-loader-card__eyebrow {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  max-width: 100%;
   min-height: 28px;
   border: 1px solid rgba(var(--connection-accent-rgb), 0.28);
   border-radius: 999px;
@@ -4226,6 +4233,8 @@ input[type="checkbox"]:checked::before {
   font-weight: 860;
   letter-spacing: 0.08em;
   line-height: 1;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .connection-loader-scene {
@@ -4387,7 +4396,7 @@ input[type="checkbox"]:checked::before {
 }
 
 .connection-loader-card h2 {
-  max-width: 440px;
+  width: min(100%, 440px);
   margin: 0;
   color: var(--text-strong);
   font-family: var(--font-display);
@@ -4406,12 +4415,13 @@ input[type="checkbox"]:checked::before {
 }
 
 .connection-loader-card p {
-  max-width: 390px;
+  width: min(100%, 390px);
   margin: 0;
   color: var(--muted);
   font-size: 0.92rem;
   font-weight: 580;
   line-height: 1.65;
+  overflow-wrap: anywhere;
   text-wrap: balance;
 }
 
@@ -4545,21 +4555,25 @@ input[type="checkbox"]:checked::before {
 .service-status-panel {
   display: grid;
   place-items: center;
+  min-width: 0;
   min-height: calc(100vh - 120px);
-  padding: 0;
+  padding: 0 clamp(16px, 4vw, 64px);
   text-align: center;
 }
 
 .service-status-panel__copy {
   display: grid;
-  justify-items: start;
+  width: min(100%, 980px);
+  min-width: 0;
+  justify-items: center;
   gap: 16px;
-  max-width: 700px;
 }
 
 .service-status-panel__eyebrow {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  max-width: 100%;
   min-height: 32px;
   gap: 8px;
   border: 1px solid rgba(255, 209, 102, 0.42);
@@ -4569,6 +4583,11 @@ input[type="checkbox"]:checked::before {
   color: #ffe7a3;
   font-size: 0.82rem;
   font-weight: 860;
+  text-align: center;
+}
+
+.service-status-panel__eyebrow > span {
+  overflow-wrap: anywhere;
 }
 
 .service-status-panel--unavailable .service-status-panel__eyebrow {
@@ -4578,13 +4597,17 @@ input[type="checkbox"]:checked::before {
 }
 
 .service-status-panel h2 {
+  width: 100%;
+  margin: 0;
   color: var(--text-strong);
   font-family: var(--font-display);
-  font-size: clamp(2.6rem, 10vw, 5.4rem);
+  font-size: clamp(2.6rem, 7vw, 5.4rem);
   line-height: 1.04;
   font-weight: 880;
   letter-spacing: 0;
-  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  word-break: normal;
 }
 
 .app-shell--guard .service-status-panel h2 {
@@ -4595,11 +4618,14 @@ input[type="checkbox"]:checked::before {
 }
 
 .service-status-panel p {
-  max-width: 600px;
+  width: min(100%, 600px);
+  margin: 0;
   color: var(--muted);
   font-size: 1rem;
   font-weight: 580;
   line-height: 1.68;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .service-status-panel__facts {
@@ -4642,7 +4668,7 @@ input[type="checkbox"]:checked::before {
   display: inline-grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  max-width: 680px;
+  width: min(100%, 680px);
   gap: 10px;
   border: 1px solid rgba(255, 111, 145, 0.36);
   border-radius: 8px;
@@ -4672,12 +4698,15 @@ input[type="checkbox"]:checked::before {
 
 .login-panel__copy {
   display: grid;
+  width: 100%;
+  min-width: 0;
   justify-items: start;
   gap: 16px;
   max-width: 640px;
 }
 
 .login-panel h2 {
+  width: 100%;
   max-width: 720px;
   color: var(--text-strong);
   font-family: var(--font-display);
@@ -4685,15 +4714,19 @@ input[type="checkbox"]:checked::before {
   line-height: 1.02;
   font-weight: 880;
   letter-spacing: 0;
-  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  word-break: normal;
 }
 
 .login-panel p {
-  max-width: 560px;
+  width: min(100%, 560px);
   color: var(--muted);
   font-size: 1rem;
   font-weight: 560;
   line-height: 1.68;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .login-panel__actions {
