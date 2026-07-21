@@ -6963,6 +6963,13 @@ input[type="checkbox"]:checked::before {
   margin-bottom: 18px;
 }
 
+.guard-moderation-policy-card {
+  border-color: color-mix(in srgb, var(--purple) 42%, var(--border));
+  background:
+    linear-gradient(135deg, rgba(99, 102, 241, 0.12), transparent 58%),
+    var(--panel);
+}
+
 .guard-moderation-advanced,
 .guard-moderation-rule-details,
 .guard-registry-case details {

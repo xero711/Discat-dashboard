@@ -63,6 +63,7 @@ const AUDIT_ACTION_LABELS = {
   "guard.risk.update": "危険度判断設定の保存",
 };
 const AUDIT_FIELD_LABELS = {
+  external_apps_blocked: "全チャンネルの外部アプリ禁止",
   value: "値",
   guild_id: "サーバーID",
   enabled: "有効状態",
@@ -959,6 +960,7 @@ const state = {
     },
     moderationForm: {
       guild_id: "",
+      external_apps_blocked: false,
       features: {},
       trusted_user_ids: [],
       trusted_role_ids: [],
@@ -3775,6 +3777,7 @@ function guardModerationFormFromSettings(guildId) {
   const settings = state.guard.moderationSettings.find((item) => item.guild_id === resolvedGuildId);
   return normalizeGuardModerationForm({
     guild_id: resolvedGuildId,
+    external_apps_blocked: settings?.external_apps_blocked ?? false,
     features: settings?.features ?? {},
     ...Object.fromEntries(
       GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, settings?.[field.id] ?? []]),
@@ -7091,6 +7094,7 @@ function normalizeGuardModerationForm(form) {
   const rawFeatures = isObject(form?.features) ? form.features : {};
   return {
     guild_id: String(form?.guild_id ?? ""),
+    external_apps_blocked: form?.external_apps_blocked === true,
     ...Object.fromEntries(
       GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, normalizeGuardModerationIds(form?.[field.id])]),
     ),
@@ -7875,6 +7879,23 @@ function renderGuardModeration() {
           <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
+        <article class="feature-card guard-moderation-card guard-moderation-policy-card">
+          <div class="feature-card__header">
+            <div class="panel-heading">${icon("shield")}<h2>サーバー全体の権限制御</h2></div>
+            <span class="feature-status ${form.external_apps_blocked ? "feature-status--on" : ""}">${form.external_apps_blocked ? "外部アプリ禁止中" : "外部アプリ許可"}</span>
+          </div>
+          <p class="guard-moderation-card__description">新しく作成されるチャンネルを含め、サーバー全体のDiscord権限をGuardが自動同期します。</p>
+          <div class="settings-grid guard-moderation-card__fields">
+            <label class="toggle-row guard-verification-toggle">
+              <input type="checkbox" data-guard-moderation-global-field="external_apps_blocked" ${form.external_apps_blocked ? "checked" : ""} />
+              <span>全チャンネルで外部アプリの使用を禁止する</span>
+            </label>
+            <div class="field">
+              <span>認証済みユーザーの投票権限</span>
+              <small>認証設定が有効なサーバーでは、認証済みロールを持つユーザーだけが投票を作成できるよう自動設定されます。</small>
+            </div>
+          </div>
+        </article>
         <article class="feature-card guard-moderation-card guard-moderation-trust-card">
           <div class="feature-card__header">
             <div class="panel-heading">${icon("lock")}<h2>サーバー共通の信頼リスト</h2></div>
@@ -8691,6 +8712,23 @@ async function saveGuardInvitationSettings() {
     }
   }
   return saved;
+}
+
+function updateGuardModerationGlobalField(target, options = { renderAfter: true }) {
+  const field = target.dataset.guardModerationGlobalField;
+  if (field !== "external_apps_blocked") {
+    return;
+  }
+  const form = normalizeGuardModerationForm(state.guard.moderationForm);
+  form.external_apps_blocked = target instanceof HTMLInputElement
+    ? target.checked
+    : false;
+  state.guard.moderationForm = form;
+  state.guard.moderationError = null;
+  updateDirtyState("guardModeration");
+  if (options.renderAfter) {
+    render();
+  }
 }
 
 function updateGuardModerationField(target, options = { renderAfter: true }) {
@@ -9547,6 +9585,7 @@ function guardModerationPayload(form) {
   const normalized = normalizeGuardModerationForm(form);
   return {
     guild_id: normalized.guild_id,
+    external_apps_blocked: normalized.external_apps_blocked,
     ...Object.fromEntries(GUARD_MODERATION_TRUST_FIELDS.map((field) => [field.id, normalized[field.id]])),
     features: Object.fromEntries(Object.entries(normalized.features).map(([featureId, settings]) => {
       const { target_channel_ids: _legacyTargetChannelIds, ...canonical } = settings;
@@ -13235,6 +13274,8 @@ function handleChange(event) {
     updateGuardVerificationField(target, { renderAfter: true });
   } else if (target.dataset.guardInvitationField) {
     updateGuardInvitationField(target, { renderAfter: true });
+  } else if (target.dataset.guardModerationGlobalField) {
+    updateGuardModerationGlobalField(target, { renderAfter: true });
   } else if (target.dataset.guardModerationField) {
     updateGuardModerationField(target, { renderAfter: true });
   } else if (target.dataset.guardLoggingField) {
