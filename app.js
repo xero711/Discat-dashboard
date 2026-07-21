@@ -1022,6 +1022,7 @@ let guildOptionsRefreshInFlight = false;
 let guildOptionsRenderPending = false;
 let guardDataLoadPromise = null;
 let guardDataRetryTimerId = null;
+let productTransitionTimerId = null;
 const dashboardAccessRequests = new Map();
 const dashboardAccessLoggedInMemory = new Set();
 let turnstileScriptPromise = null;
@@ -1373,8 +1374,33 @@ function normalizeOnePageId(pageId) {
 }
 
 function renderProductTransition(fromProduct, toProduct) {
-  state.productTransition = null;
+  if (productTransitionTimerId) {
+    window.clearTimeout(productTransitionTimerId);
+    productTransitionTimerId = null;
+  }
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!prefersReducedMotion && typeof document.startViewTransition === "function") {
+    state.productTransition = { from: fromProduct, to: toProduct, rendered: true };
+    const transition = document.startViewTransition(() => render());
+    transition.finished
+      .catch(() => undefined)
+      .finally(() => {
+        if (state.productTransition?.from === fromProduct && state.productTransition?.to === toProduct) {
+          state.productTransition = null;
+        }
+      });
+    return;
+  }
+
+  state.productTransition = { from: fromProduct, to: toProduct, rendered: false };
   render();
+  productTransitionTimerId = window.setTimeout(() => {
+    productTransitionTimerId = null;
+    if (state.productTransition?.from === fromProduct && state.productTransition?.to === toProduct) {
+      state.productTransition = null;
+    }
+  }, 520);
 }
 
 async function loadOneDashboardData() {
@@ -5694,6 +5720,57 @@ function currentLoginBlocked() {
   return state.activeProduct === "guard" ? guardLoginBlocked() : loginBlocked();
 }
 
+function renderWorkspaceTitle(eyebrow, title, description, steps = []) {
+  return `
+    <div class="workspace__title">
+      <div class="workspace__title-copy">
+        <span class="workspace__eyebrow">${escapeHtml(eyebrow)}</span>
+        <h2>${escapeHtml(title)}</h2>
+        ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+      </div>
+      ${steps.length ? `
+        <ol class="workspace-guide" aria-label="設定の進め方">
+          ${steps.map((step, index) => `
+            <li>
+              <b>${index + 1}</b>
+              <span>${escapeHtml(step)}</span>
+            </li>
+          `).join("")}
+        </ol>
+      ` : ""}
+    </div>
+  `;
+}
+
+function oneWorkspaceSteps(page, view) {
+  if (view === "user") {
+    return ["タブを選ぶ", "内容を確認・管理"];
+  }
+  if (view === "host") {
+    return ["項目を選ぶ", "稼働状況を確認"];
+  }
+  if (view === "audit") {
+    return ["サーバーを選ぶ", "変更履歴を確認"];
+  }
+  return ["サーバーを選ぶ", `${page.label}を設定`, "変更を保存"];
+}
+
+function guardWorkspaceSteps(feature) {
+  if (feature.id === "admin") {
+    return ["項目を選ぶ", "稼働状況を確認"];
+  }
+  if (feature.id === "abuse-registry") {
+    return ["対象を確認", "内容を入力", "審査へ送信"];
+  }
+  if (feature.id === "audit-log") {
+    return ["サーバーを選ぶ", "変更履歴を確認"];
+  }
+  if (feature.id === "moderation") {
+    return ["サーバーを選ぶ", "検知条件を選ぶ", "変更を保存"];
+  }
+  return ["サーバーを選ぶ", `${feature.label}を設定`, "変更を保存"];
+}
+
 function renderDashboard() {
   const guild = selectedGuild();
   const canConfigure = selectedGuildCanConfigure();
@@ -5701,21 +5778,18 @@ function renderDashboard() {
   const view = activeSettingsView();
   const pageTitle =
     view === "user"
-      ? escapeHtml(state.user?.username ?? "ユーザー")
+      ? state.user?.username ?? "ユーザー"
       : view === "host"
         ? "管理者用"
         : canConfigure
-          ? escapeHtml(guild?.name ?? "")
+          ? guild?.name ?? ""
           : "サーバーを選択";
   if (view === "user") {
     return `
       <div class="dashboard-grid dashboard-grid--user">
         <div class="workspace workspace--user">
           <div class="workspace-main workspace-main--user">
-            <div class="workspace__title">
-              <span>${page.eyebrow}</span>
-              <h2>${pageTitle}</h2>
-            </div>
+            ${renderWorkspaceTitle(page.eyebrow, pageTitle, page.help, oneWorkspaceSteps(page, view))}
             ${renderWorkspaceContent()}
           </div>
         </div>
@@ -5729,10 +5803,7 @@ function renderDashboard() {
         <div class="workspace-layout">
           ${renderFunctionSidebar()}
           <div class="workspace-main">
-            <div class="workspace__title">
-              <span>${page.eyebrow}</span>
-              <h2>${pageTitle}</h2>
-            </div>
+            ${renderWorkspaceTitle(page.eyebrow, pageTitle, page.help, oneWorkspaceSteps(page, view))}
             ${renderWorkspaceContent()}
           </div>
         </div>
@@ -7432,10 +7503,7 @@ function renderGuardDashboard() {
         <div class="workspace-layout workspace-layout--guard">
           ${renderGuardFunctionSidebar()}
           <div class="workspace-main">
-            <div class="workspace__title">
-              <span>${escapeHtml(feature.label)}</span>
-              <h2>${escapeHtml(pageTitle)}</h2>
-            </div>
+            ${renderWorkspaceTitle(feature.label, pageTitle, feature.help, guardWorkspaceSteps(feature))}
             ${renderGuardFeatureContent(feature)}
           </div>
         </div>
@@ -7487,7 +7555,7 @@ function renderGuardFunctionSidebar() {
   return `
     <aside class="function-sidebar" aria-label="Guard機能メニュー">
       <div class="function-sidebar__label">Guard機能</div>
-      <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="Guard機能">
+      <div class="function-sidebar__items" role="tablist" aria-label="Guard機能">
         ${visibleGuardFeatures().map(renderGuardFunctionNavItem).join("")}
       </div>
     </aside>
@@ -7513,7 +7581,7 @@ function renderGuardInvitation() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>有効にすると、新しく作成されたサーバー招待リンクを検知してすぐに無効化します。既存のリンクは変更しません。</span>
       </div>
-      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
+      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">サーバー一覧から設定対象を選択してください。</p>`}
       ${state.guard.invitationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.invitationError)}</span></p>` : ""}
       ${state.guard.invitationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.invitationMessage)}</span></p>` : ""}
       <form class="settings-grid guard-verification-form" data-guard-invitation-form>
@@ -7546,7 +7614,6 @@ function renderGuardFunctionNavItem(feature) {
           <span>${escapeHtml(feature.description)}</span>
         </span>
       </button>
-      ${renderInfoPopover(feature.help, `${feature.label}の説明`)}
     </div>
   `;
 }
@@ -7560,7 +7627,7 @@ function renderGuardGuildList() {
     <aside class="guild-list ${state.guildListCollapsed ? "guild-list--collapsed" : ""}" aria-label="Guardサーバー">
       <div class="guild-list__header">
         <div class="panel-heading">
-          ${icon("server")}<h2>サーバー</h2>
+          ${icon("server")}<h2>設定するサーバー</h2>
         </div>
         <button class="guild-list__toggle" type="button" data-action="toggle-guild-list" aria-expanded="${guildListExpanded}" aria-controls="guard-guild-list-body">
           <span>${guildListExpanded ? "閉じる" : "開く"}</span>${icon(guildListExpanded ? "chevronUp" : "chevronDown")}
@@ -7849,7 +7916,7 @@ function renderGuardVerification() {
       <form class="settings-grid guard-verification-form" data-guard-verification-form>
         <div class="field guard-selected-server">
           <span>選択中のサーバー</span>
-          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <strong>${escapeHtml(selectedGuild?.name ?? "サーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
         ${renderGuardVerificationChannelField("button_channel_id", "認証ボタン配置チャンネル", form.button_channel_id, selectedGuild)}
@@ -7896,7 +7963,7 @@ function renderGuardModeration() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>最初はすべて無効です。必要な検知だけを有効にし、各レベルの実際の秒数・回数を確認して保存してください。通常会話を除外したい場合は、チャンネルまたは信頼IDを追加できます。</span>
+        ${icon("shield")}<span>はじめて設定する場合は、必要な検知を有効にして「ゆるめ」から試し、処罰内容を確認して保存してください。検知条件が書かれたカード自体を押すとペースを選べます。</span>
       </div>
       ${state.guard.moderationCatalog.member_actions_enabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、メッセージ内容や投稿回数からの自動キック／BANは無効です。検知時の処理はログまたはメッセージ削除までに制限されます。</span></div>`}
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
@@ -7904,35 +7971,37 @@ function renderGuardModeration() {
       <form class="guard-moderation-form" data-guard-moderation-form>
         <div class="field guard-selected-server">
           <span>選択中のサーバー</span>
-          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <strong>${escapeHtml(selectedGuild?.name ?? "サーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
-        <article class="feature-card guard-moderation-card guard-moderation-policy-card">
-          <div class="feature-card__header">
-            <div class="panel-heading">${icon("shield")}<h2>サーバー全体の権限制御</h2></div>
-            <span class="feature-status ${form.external_apps_blocked ? "feature-status--on" : ""}">${form.external_apps_blocked ? "外部アプリ禁止中" : "外部アプリ許可"}</span>
-          </div>
-          <p class="guard-moderation-card__description">新しく作成されるチャンネルを含め、サーバー全体のDiscord権限をGuardが自動同期します。</p>
-          <div class="settings-grid guard-moderation-card__fields">
-            <label class="toggle-row guard-verification-toggle">
-              <input type="checkbox" data-guard-moderation-global-field="external_apps_blocked" ${form.external_apps_blocked ? "checked" : ""} />
-              <span>全チャンネルで外部アプリの使用を禁止する</span>
-            </label>
-            <div class="field">
-              <span>認証済みユーザーの投票権限</span>
-              <small>認証設定が有効なサーバーでは、認証済みロールを持つユーザーだけが投票を作成できるよう自動設定されます。</small>
+        <div class="guard-moderation-foundation-grid">
+          <article class="feature-card guard-moderation-card guard-moderation-policy-card">
+            <div class="feature-card__header">
+              <div class="panel-heading">${icon("shield")}<h2>サーバー全体の権限制御</h2></div>
+              <span class="feature-status ${form.external_apps_blocked ? "feature-status--on" : ""}">${form.external_apps_blocked ? "外部アプリ禁止中" : "外部アプリ許可"}</span>
             </div>
-          </div>
-        </article>
-        <article class="feature-card guard-moderation-card guard-moderation-trust-card">
-          <div class="feature-card__header">
-            <div class="panel-heading">${icon("lock")}<h2>サーバー共通の信頼リスト</h2></div>
-          </div>
-          <p class="guard-moderation-card__description">ここに追加したIDは、すべての荒らし検知から除外されます。普段使う連携BotやWebhookだけを登録してください。</p>
-          <div class="settings-grid guard-moderation-card__fields">
-            ${GUARD_MODERATION_TRUST_FIELDS.map((field) => renderGuardModerationIdListField("guild", field, form[field.id])).join("")}
-          </div>
-        </article>
+            <p class="guard-moderation-card__description">新しく作成されるチャンネルを含め、サーバー全体のDiscord権限をGuardが自動同期します。</p>
+            <div class="settings-grid guard-moderation-card__fields">
+              <label class="toggle-row guard-verification-toggle">
+                <input type="checkbox" data-guard-moderation-global-field="external_apps_blocked" ${form.external_apps_blocked ? "checked" : ""} />
+                <span><strong>外部アプリを禁止する</strong><small>すべてのチャンネルへ同じ権限を適用します。</small></span>
+              </label>
+              <div class="field">
+                <span>認証済みユーザーの投票権限</span>
+                <small>認証設定が有効な場合、認証済みロールを持つユーザーだけが投票を作成できます。</small>
+              </div>
+            </div>
+          </article>
+          <article class="feature-card guard-moderation-card guard-moderation-trust-card">
+            <div class="feature-card__header">
+              <div class="panel-heading">${icon("lock")}<h2>サーバー共通の信頼リスト</h2></div>
+            </div>
+            <p class="guard-moderation-card__description">ここに追加したIDは、すべての荒らし検知から除外されます。普段使う連携BotやWebhookだけを登録してください。</p>
+            <div class="settings-grid guard-moderation-card__fields">
+              ${GUARD_MODERATION_TRUST_FIELDS.map((field) => renderGuardModerationIdListField("guild", field, form[field.id])).join("")}
+            </div>
+          </article>
+        </div>
         <div class="guard-moderation-grid">
           ${guardModerationFeatureDefinitions().map((feature) => renderGuardModerationFeatureCard(feature, form.features[feature.id], selectedGuild)).join("")}
         </div>
@@ -7971,22 +8040,23 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
       <div class="settings-grid guard-moderation-card__fields">
         <label class="toggle-row guard-verification-toggle">
           <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="enabled" ${normalized.enabled ? "checked" : ""} />
-          <span>この検知を有効にする</span>
+          <span><strong>この検知を有効にする</strong><small>オフの間は検知も処罰も行いません。</small></span>
         </label>
-        ${!isNgWordFeature ? `<label class="field">
-          <span>${isPaceFeature ? "検知ペース" : "検知感度"}</span>
-          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
-            ${state.guard.moderationCatalog.levels.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}${level.description ? ` — ${escapeHtml(level.description)}` : ""}</option>`).join("")}
-          </select>
-          <small>${isPaceFeature ? "下の実数値を確認して選べます。" : "誤検知が気になる場合は「ゆるめ」から始めてください。"}</small>
-        </label>` : `<div class="field"><span>検知方式</span><small>登録した語句との一致で判定するため、感度の選択はありません。</small></div>`}
         <label class="field">
           <span>処罰内容</span>
           <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="action">
             ${state.guard.moderationCatalog.actions.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
           </select>
         </label>
-        ${isPaceFeature ? renderGuardModerationRuleDetails(feature.id, normalized.level) : ""}
+        ${isPaceFeature
+          ? renderGuardModerationRuleSelector(feature.id, normalized.level)
+          : !isNgWordFeature ? `<label class="field">
+          <span>検知感度</span>
+          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
+            ${state.guard.moderationCatalog.levels.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}${level.description ? ` — ${escapeHtml(level.description)}` : ""}</option>`).join("")}
+          </select>
+          <small>誤検知が気になる場合は「ゆるめ」から始めてください。</small>
+        </label>` : `<div class="field"><span>検知方式</span><small>登録した語句との一致で判定するため、感度の選択はありません。</small></div>`}
         ${renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.ignored_channel_ids, guild)}
         <details class="guard-moderation-advanced">
           <summary>この検知だけの信頼リスト</summary>
@@ -8133,7 +8203,7 @@ function renderGuardRisk() {
         ${icon("shield")}<span>アカウント年齢、アイコン・表示名、ユーザー名の生成パターン、招待リンクの参加増加、招待元、Guardが観測した他サーバーの処分歴を組み合わせて0〜100%で判定します。DiscordのBot APIから取得できない自己紹介は判定対象外で、未観測の情報は推測しません。</span>
       </div>
       ${state.guard.riskMemberActionsEnabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、アカウント年齢などの危険度推測だけでユーザーをキック／BANする処置は無効です。管理者通知とログで確認してください。</span></div>`}
-      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
+      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">サーバー一覧から設定対象を選択してください。</p>`}
       ${state.guard.riskError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.riskError)}</span></p>` : ""}
       ${state.guard.riskMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.riskMessage)}</span></p>` : ""}
       <form class="guard-moderation-form" data-guard-risk-form>
@@ -8189,7 +8259,7 @@ function renderGuardLogging() {
       <form class="guard-moderation-form guard-logging-form" data-guard-logging-form>
         <div class="field guard-selected-server">
           <span>選択中のサーバー</span>
-          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <strong>${escapeHtml(selectedGuild?.name ?? "サーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
         <div class="guard-moderation-grid guard-logging-grid">
@@ -8809,6 +8879,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
     }
     return;
   }
+  const restoreLevelFocus = field === "level" && target instanceof HTMLInputElement && target.type === "radio";
   const value = target instanceof HTMLInputElement && target.type === "checkbox"
     ? target.checked
     : target instanceof HTMLSelectElement && target.multiple
@@ -8830,6 +8901,14 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   updateDirtyState("guardModeration");
   if (options.renderAfter) {
     render();
+    if (restoreLevelFocus) {
+      const nextInput = root.querySelector(
+        `input[type="radio"][data-guard-moderation-feature="${CSS.escape(featureId)}"][data-guard-moderation-field="level"][value="${CSS.escape(String(value))}"]`,
+      );
+      if (nextInput instanceof HTMLInputElement) {
+        nextInput.focus({ preventScroll: true });
+      }
+    }
   }
 }
 
@@ -9690,35 +9769,42 @@ function renderGuardModerationIdListField(scope, field, values) {
   `;
 }
 
-function renderGuardModerationRuleDetails(featureId, selectedLevel) {
+function renderGuardModerationRuleSelector(featureId, selectedLevel) {
   const prefixes = GUARD_MODERATION_RULE_PREFIXES[featureId] ?? [];
   const levels = state.guard.moderationCatalog.levels;
   const rules = state.guard.moderationCatalog.rules;
-  if (!prefixes.length || !levels.length || !isObject(rules)) {
+  if (!levels.length) {
     return "";
   }
   const rows = levels.map((level) => {
-    const values = isObject(rules[level.id]) ? rules[level.id] : {};
+    const values = isObject(rules) && isObject(rules[level.id]) ? rules[level.id] : {};
     const entries = Object.entries(values).filter(([key, value]) =>
       prefixes.some((prefix) => key.startsWith(prefix)) && Number.isFinite(Number(value)),
     );
-    if (!entries.length) {
-      return "";
-    }
+    const condition = entries.length
+      ? entries.map(([key, value]) => `${guardModerationRuleLabel(key)}: ${guardModerationRuleValue(key, value)}`).join(" / ")
+      : level.description || "このペースの検知条件を使用します。";
+    const selected = level.id === selectedLevel;
     return `
-      <div class="guard-rule-level ${level.id === selectedLevel ? "guard-rule-level--selected" : ""}">
-        <strong>${escapeHtml(level.label)}${level.id === selectedLevel ? "（選択中）" : ""}</strong>
-        <span>${entries.map(([key, value]) => `${escapeHtml(guardModerationRuleLabel(key))}: ${escapeHtml(guardModerationRuleValue(key, value))}`).join(" / ")}</span>
-      </div>
+      <label class="guard-rule-level ${selected ? "guard-rule-level--selected" : ""}">
+        <input type="radio" name="guard-moderation-level-${escapeAttribute(featureId)}" value="${escapeAttribute(level.id)}" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="level" ${selected ? "checked" : ""} />
+        <span class="guard-rule-level__copy">
+          <span class="guard-rule-level__header">
+            <strong>${escapeHtml(level.label)}</strong>
+            <em>${selected ? "選択中" : "選択する"}</em>
+          </span>
+          <span class="guard-rule-level__condition">${escapeHtml(condition)}</span>
+        </span>
+      </label>
     `;
-  }).filter(Boolean);
-  return rows.length ? `
-    <div class="field guard-moderation-rule-details">
-      <span>実際の検知条件</span>
-      <small>「時間内の回数が上限以上」になると検知します。短時間・低い上限ほど厳しい設定です。</small>
-      ${rows.join("")}
-    </div>
-  ` : "";
+  });
+  return `
+    <fieldset class="field guard-moderation-rule-selector">
+      <legend>検知ペースと実際の条件</legend>
+      <p>条件カードを押して選択します。短時間・低い上限ほど厳しい設定です。</p>
+      <div class="guard-rule-options">${rows.join("")}</div>
+    </fieldset>
+  `;
 }
 
 function guardModerationRuleLabel(key) {
@@ -10025,7 +10111,7 @@ function renderFunctionSidebar() {
   return `
     <aside class="function-sidebar" aria-label="機能メニュー">
       <div class="function-sidebar__label">サーバー設定</div>
-      <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="設定ページ">
+      <div class="function-sidebar__items" role="tablist" aria-label="設定ページ">
         ${visibleSettingsPages().map(renderFunctionNavItem).join("")}
       </div>
     </aside>
@@ -10043,21 +10129,7 @@ function renderFunctionNavItem(page) {
           <span>${escapeHtml(page.description)}</span>
         </span>
       </button>
-      ${renderInfoPopover(page.help, `${page.label}の説明`)}
     </div>
-  `;
-}
-
-function renderInfoPopover(text, label) {
-  const tooltip = String(text ?? "").trim();
-  if (!tooltip) {
-    return "";
-  }
-  return `
-    <span class="info-help" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(tooltip)}">
-      ${icon("info")}
-      <span class="info-popover" role="tooltip">${escapeHtml(tooltip)}</span>
-    </span>
   `;
 }
 
@@ -10070,7 +10142,7 @@ function renderGuildList() {
     <aside class="guild-list ${state.guildListCollapsed ? "guild-list--collapsed" : ""}" aria-label="Discordサーバー">
       <div class="guild-list__header">
         <div class="panel-heading">
-          ${icon("server")}<h2>サーバー</h2>
+          ${icon("server")}<h2>設定するサーバー</h2>
         </div>
         <button class="guild-list__toggle" type="button" data-action="toggle-guild-list" aria-expanded="${guildListExpanded}" aria-controls="guild-list-body">
           <span>${guildListExpanded ? "閉じる" : "開く"}</span>${icon(guildListExpanded ? "chevronUp" : "chevronDown")}
