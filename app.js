@@ -59,6 +59,13 @@ const AUDIT_ACTION_LABELS = {
   "guard.verification.update": "認証設定の保存",
   "guard.invitation.update": "招待リンク設定の保存",
   "guard.moderation.update": "荒らし対策設定の保存",
+  "guard.abuse_registry.submit": "荒らし登録申請",
+  "guard.abuse_registry.direct_register": "荒らしユーザー直接登録",
+  "guard.abuse_registry.approve": "荒らし登録承認",
+  "guard.abuse_registry.reject": "荒らし登録却下",
+  "guard.abuse_registry.revoke": "荒らし登録取消",
+  "guard.abuse_registry.add_alt": "別アカウント追加",
+  "guard.abuse_registry.remove_alt": "別アカウント削除",
   "guard.logging.update": "ログ機能設定の保存",
   "guard.risk.update": "危険度判断設定の保存",
 };
@@ -382,7 +389,7 @@ const GUARD_FEATURES = [
   {
     id: "abuse-registry",
     label: "荒らし登録",
-    description: "悪質な利用者を証拠付きで報告し、Guard全体で共有する審査状況を確認します。",
+    description: "悪質な利用者を報告し、Guard全体で共有する審査状況を確認します。",
     help: "サーバー管理者は報告と異議申し立てができます。Guardオーナーの承認前に全体拒否へ反映されることはありません。",
     icon: "alert",
   },
@@ -898,9 +905,12 @@ const state = {
       levels: GUARD_MODERATION_LEVELS,
       actions: GUARD_MODERATION_ACTIONS,
       rules: {},
+      member_actions_enabled: false,
     },
     loggingSettings: [],
     riskSettings: [],
+    riskActions: GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id)),
+    riskMemberActionsEnabled: false,
     verificationOptions: null,
     verificationOptionsError: null,
     verificationRecords: [],
@@ -1432,7 +1442,7 @@ async function loadGuardDashboardData() {
     if (guildId) {
       void ensureDashboardAccessLogged("guard", guildId);
     }
-    if (activeGuardFeature().id === "abuse-registry") {
+    if (["abuse-registry", "admin"].includes(activeGuardFeature().id)) {
       await loadGuardAbuseRegistry();
     } else if (activeGuardFeature().id === "audit-log" && guildId) {
       await loadAuditLogs("guard", guildId);
@@ -1452,7 +1462,7 @@ async function loadGuardDashboardData() {
   if (guildId) {
     void ensureDashboardAccessLogged("guard", guildId);
   }
-  if (activeGuardFeature().id === "abuse-registry") {
+  if (["abuse-registry", "admin"].includes(activeGuardFeature().id)) {
     await loadGuardAbuseRegistry();
   } else if (activeGuardFeature().id === "audit-log" && guildId) {
     await loadAuditLogs("guard", guildId);
@@ -4504,6 +4514,8 @@ function resetGuardAuthenticatedState() {
   state.guard.loggingSettings = [];
   state.guard.invitationSettings = [];
   state.guard.riskSettings = [];
+  state.guard.riskActions = GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
+  state.guard.riskMemberActionsEnabled = false;
   state.guard.verificationOptions = null;
   state.guard.verificationOptionsError = null;
   state.guard.verificationRecords = [];
@@ -5842,6 +5854,16 @@ async function performGuardDataLoad(options = {}) {
       }
       if (riskResult.status === "fulfilled") {
         state.guard.riskSettings = normalizeGuardRiskSettings(riskResult.value?.settings);
+        const riskActions = Array.isArray(riskResult.value?.actions)
+          ? riskResult.value.actions.map((action) => ({
+              id: String(action?.id ?? ""),
+              label: String(action?.label ?? action?.id ?? ""),
+            })).filter((action) => action.id)
+          : [];
+        state.guard.riskActions = riskActions.length
+          ? riskActions
+          : GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
+        state.guard.riskMemberActionsEnabled = riskResult.value?.member_actions_enabled === true;
       }
       state.guard.verificationRecords = [];
       if (optionsResult.status === "fulfilled" && optionsResult.value) {
@@ -5911,6 +5933,8 @@ async function performGuardDataLoad(options = {}) {
   state.guard.moderationCatalog = normalizeGuardModerationCatalog(null);
   state.guard.loggingSettings = [];
   state.guard.riskSettings = [];
+  state.guard.riskActions = GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
+  state.guard.riskMemberActionsEnabled = false;
   state.guard.verificationOptions = null;
   state.guard.verificationRecords = [];
   hydrateGuardVerificationForm();
@@ -7133,6 +7157,7 @@ function normalizeGuardModerationCatalog(payload) {
     levels: levels.length ? levels : GUARD_MODERATION_LEVELS,
     actions: actions.length ? actions : GUARD_MODERATION_ACTIONS,
     rules: isObject(payload?.rules) ? payload.rules : {},
+    member_actions_enabled: payload?.member_actions_enabled === true,
   };
 }
 
@@ -7871,6 +7896,7 @@ function renderGuardModeration() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>最初はすべて無効です。必要な検知だけを有効にし、各レベルの実際の秒数・回数を確認して保存してください。通常会話を除外したい場合は、チャンネルまたは信頼IDを追加できます。</span>
       </div>
+      ${state.guard.moderationCatalog.member_actions_enabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、メッセージ内容や投稿回数からの自動キック／BANは無効です。検知時の処理はログまたはメッセージ削除までに制限されます。</span></div>`}
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
       ${state.guard.moderationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.moderationMessage)}</span></p>` : ""}
       <form class="guard-moderation-form" data-guard-moderation-form>
@@ -8077,7 +8103,7 @@ function renderGuardRiskActionField(field, label, value, description) {
     <label class="field">
       <span>${escapeHtml(label)}</span>
       <select data-guard-risk-field="${escapeAttribute(field)}">
-        ${GUARD_RISK_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === value ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
+        ${state.guard.riskActions.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === value ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
       </select>
       <small>${escapeHtml(description)}</small>
     </label>
@@ -8104,6 +8130,7 @@ function renderGuardRisk() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>アカウント年齢、アイコン・表示名、ユーザー名の生成パターン、招待リンクの参加増加、招待元、Guardが観測した他サーバーの処分歴を組み合わせて0〜100%で判定します。DiscordのBot APIから取得できない自己紹介は判定対象外で、未観測の情報は推測しません。</span>
       </div>
+      ${state.guard.riskMemberActionsEnabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、アカウント年齢などの危険度推測だけでユーザーをキック／BANする処置は無効です。管理者通知とログで確認してください。</span></div>`}
       ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
       ${state.guard.riskError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.riskError)}</span></p>` : ""}
       ${state.guard.riskMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.riskMessage)}</span></p>` : ""}
@@ -9112,6 +9139,7 @@ function normalizeGuardAbuseRegistry(payload) {
     approved_alt_user_ids: normalizeGuardModerationIds(item?.approved_alt_user_ids ?? item?.alt_user_ids),
     created_at: item?.created_at ?? null,
     updated_at: item?.updated_at ?? null,
+    decided_at: item?.decided_at ?? null,
     expires_at: item?.expires_at ?? null,
     review_reason: String(item?.review_reason ?? item?.decision_reason ?? ""),
     can_appeal: item?.can_appeal === true,
@@ -9158,7 +9186,7 @@ async function loadGuardAbuseRegistry(options = {}) {
     render();
   }
   try {
-    const payload = normalizeGuardAbuseRegistry(await guardFetchJson(guardApiUrl("/abuse-registry/cases")));
+    const payload = normalizeGuardAbuseRegistry(await guardFetchJson(guardApiUrl("/abuse-registry/cases?limit=500")));
     if (!guardSessionIsCurrent(guardSession)) {
       return false;
     }
@@ -9229,15 +9257,16 @@ function renderGuardAbuseRegistry() {
         <button class="icon-button icon-button--ghost" type="button" data-action="refresh-guard-abuse-registry" ${registry.loading ? "disabled" : ""}>${icon("refresh")}<span>${registry.loading ? "読込中" : "更新"}</span></button>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>報告だけでは全体拒否になりません。証拠をGuardオーナーが確認し、承認したユーザーIDと承認済みの別アカウントだけがGuard導入サーバーで拒否対象になります。</span>
+        ${icon("shield")}<span>報告だけでは全体拒否になりません。Guard管理者が内容を確認し、承認したユーザーIDだけがGuard導入サーバーで拒否対象になります。</span>
       </div>
       <p class="guard-inline-hint">端末識別情報や非公開の照合値は、この画面には表示されません。誤りがある場合は各案件から異議申し立てができます。</p>
       ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
       ${registry.message ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(registry.message)}</span></p>` : ""}
       ${registry.loading && !registry.loaded ? `<div class="empty-state">荒らし登録を読み込んでいます…</div>` : `
         ${renderGuardAbuseReportForm(guilds, registry)}
-        ${registry.is_owner ? renderGuardAbuseOwnerQueue(registry) : ""}
-        ${renderGuardAbuseCases(registry)}
+        ${registry.is_owner
+          ? `<div class="status-banner guard-privacy-note">${icon("lock")}<span>承認、直接登録、登録済みユーザー一覧は「管理者用」へ移動しました。</span></div>`
+          : renderGuardAbuseCases(registry)}
       `}
     </section>
   `;
@@ -9248,14 +9277,12 @@ function renderGuardAbuseReportForm(guilds, registry) {
   return `
     <article class="feature-card guard-registry-report">
       <div class="feature-card__header"><div class="panel-heading">${icon("message")}<h2>新しい報告</h2></div></div>
-      <p>実際に確認できる証拠を添えてください。憶測だけの報告や、嫌がらせ目的の登録は禁止です。</p>
+      <p>確認した行為を具体的に記入してください。憶測だけの報告や、嫌がらせ目的の登録は禁止です。</p>
       <form class="settings-grid guard-registry-form" data-guard-abuse-report-form>
         <label class="field"><span>発生したサーバー</span><select name="source_guild_id" required>${guilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${guild.id === activeGuardSelectedGuild()?.id ? "selected" : ""}>${escapeHtml(guild.name)}</option>`).join("")}</select></label>
         <label class="field"><span>対象ユーザーID</span><input name="subject_user_id" inputmode="numeric" pattern="[0-9]{15,22}" required placeholder="123456789012345678" /></label>
         <label class="field"><span>理由</span><select name="reason_code" required>${reasons.map((reason) => `<option value="${escapeAttribute(reason.id)}">${escapeHtml(reason.label)}</option>`).join("")}</select></label>
         <label class="field guard-registry-wide"><span>何が起きたか</span><textarea name="reason_text" maxlength="2000" required placeholder="日時、行為、影響を具体的に記入"></textarea></label>
-        <label class="field guard-registry-wide"><span>証拠URL（1行に1件）</span><textarea name="evidence_urls" maxlength="20000" required placeholder="https://discord.com/channels/...&#10;https://example.com/evidence"></textarea><small>最大20件・1件1,000文字。Discordメッセージリンクや、権限のある人が確認できる資料を記入してください。</small></label>
-        <label class="field guard-registry-wide"><span>証拠の補足メモ</span><textarea name="evidence_note" maxlength="1000" placeholder="URLの内容や確認方法"></textarea></label>
         <label class="field guard-registry-wide"><span>把握している別アカウントID（任意）</span><textarea name="reported_alt_user_ids" maxlength="2000" placeholder="1行に1 ID"></textarea><small>最大20件。関連を説明できるものだけを報告してください。承認前は拒否対象になりません。</small></label>
         <div class="guard-registry-confirm"><label><input type="checkbox" name="confirmed" required /> 内容が事実に基づき、虚偽報告ではないことを確認しました</label></div>
         <button class="icon-button icon-button--primary" type="submit" ${registry.saving || !guilds.length ? "disabled" : ""}>${icon("shield")}<span>審査へ送る</span></button>
@@ -9270,7 +9297,8 @@ function renderGuardAbuseOwnerQueue(registry) {
   return `
     <article class="feature-card guard-registry-owner">
       <div class="feature-card__header"><div class="panel-heading">${icon("lock")}<h2>Guardオーナー審査</h2></div><span class="feature-status ${pending.length + appeals.length ? "feature-status--on" : ""}">${pending.length + appeals.length}件</span></div>
-      <p>承認するとGuard全体の拒否対象になります。証拠と対象IDを再確認し、判断理由を必ず残してください。</p>
+      <p>承認するとGuard全体の拒否対象になります。対象IDと報告内容を再確認し、判断理由を必ず残してください。</p>
+      ${pending.length ? `<h3>登録申請</h3>${pending.map((item) => renderGuardAbuseCaseCard(item, registry)).join("")}` : `<p class="guard-inline-hint">審査待ちの登録申請はありません。</p>`}
       ${appeals.length ? `<h3>異議申し立て</h3>${appeals.map(renderGuardAbuseAppealCard).join("")}` : `<p class="guard-inline-hint">審査待ちの異議申し立てはありません。</p>`}
     </article>
   `;
@@ -9282,6 +9310,77 @@ function renderGuardAbuseCases(registry) {
       <div class="settings-panel__header"><div class="panel-heading">${icon("history")}<h2>${registry.is_owner ? "登録案件" : "報告した案件"}</h2></div><span>${registry.cases.length}件</span></div>
       ${registry.cases.length ? registry.cases.map((item) => renderGuardAbuseCaseCard(item, registry)).join("") : `<div class="empty-state">表示できる案件はありません。</div>`}
     </div>
+  `;
+}
+
+function guardRegisteredUsers(registry) {
+  const users = new Map();
+  registry.cases
+    .filter((item) => item.status === "approved")
+    .forEach((item) => {
+      const identities = [
+        { user_id: item.subject_user_id, link_type: "primary" },
+        ...item.approved_alt_user_ids.map((userId) => ({ user_id: userId, link_type: "manual_alt" })),
+      ];
+      identities.forEach((identity) => {
+        if (!identity.user_id || users.has(identity.user_id)) {
+          return;
+        }
+        users.set(identity.user_id, {
+          ...identity,
+          case_id: item.id,
+          reason_code: item.reason_code,
+          registered_at: item.decided_at || item.updated_at || item.created_at,
+          expires_at: item.expires_at,
+        });
+      });
+    });
+  return [...users.values()].sort((left, right) => String(right.registered_at ?? "").localeCompare(String(left.registered_at ?? "")));
+}
+
+function renderGuardRegisteredUsers(registry) {
+  const users = guardRegisteredUsers(registry);
+  const total = Number(registry.stats?.approved_identity_count ?? users.length) || users.length;
+  return `
+    <article class="feature-card guard-registry-registered">
+      <div class="feature-card__header"><div class="panel-heading">${icon("user")}<h2>登録済みユーザー一覧</h2></div><span class="feature-status ${users.length ? "feature-status--on" : ""}">${users.length}${total > users.length ? ` / ${total}` : ""}人</span></div>
+      ${users.length ? `<div class="guard-registered-user-list">${users.map((item) => `
+        <div class="guard-registered-user-row">
+          <div><strong>${escapeHtml(item.user_id)}</strong><small>${item.link_type === "primary" ? "登録対象" : "承認済み別アカウント"} · ${escapeHtml(guardText(item.reason_code, "理由未設定"))}</small></div>
+          <div><small>登録 ${escapeHtml(formatDateTime(item.registered_at))}</small>${item.expires_at ? `<small>期限 ${escapeHtml(formatDateTime(item.expires_at))}</small>` : ""}</div>
+        </div>
+      `).join("")}</div>` : `<div class="empty-state">登録済みユーザーはいません。</div>`}
+    </article>
+  `;
+}
+
+function renderGuardAbuseAdminPanel() {
+  const registry = state.guard.abuseRegistry;
+  const sourceGuild = activeGuardSelectedGuild() ?? guardConfigurableGuilds()[0] ?? null;
+  const approvedCases = registry.cases.filter((item) => item.status === "approved");
+  return `
+    <section class="host-card guard-registry-admin" aria-label="荒らし登録管理">
+      <div class="host-card__header">
+        ${icon("alert")}<h3>荒らし登録管理</h3>
+        <button class="icon-button icon-button--ghost" type="button" data-action="refresh-guard-abuse-registry" ${registry.loading ? "disabled" : ""}>${icon("refresh")}<span>${registry.loading ? "読込中" : "更新"}</span></button>
+      </div>
+      ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
+      ${registry.message ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(registry.message)}</span></p>` : ""}
+      ${registry.loading && !registry.loaded ? `<div class="empty-state">荒らし登録を読み込んでいます…</div>` : !registry.is_owner ? `<div class="empty-state">Guard管理者権限を確認できませんでした。</div>` : `
+        <article class="feature-card guard-registry-direct">
+          <div class="feature-card__header"><div class="panel-heading">${icon("lock")}<h2>ユーザーIDから直接登録</h2></div></div>
+          <p>申請を作成せず、入力したDiscordユーザーIDだけを拒否対象へ登録します。端末情報や別ユーザーは自動で関連付けません。</p>
+          <form class="guard-registry-direct-form" data-guard-abuse-direct-form>
+            <label class="field"><span>DiscordユーザーID</span><input name="subject_user_id" inputmode="numeric" pattern="[0-9]{15,22}" required placeholder="123456789012345678" /></label>
+            <button class="icon-button icon-button--primary" type="submit" ${registry.saving || !sourceGuild ? "disabled" : ""}>${icon("shield")}<span>直接登録</span></button>
+          </form>
+          ${sourceGuild ? `<small class="guard-inline-hint">管理記録の対象サーバー: ${escapeHtml(sourceGuild.name)} (${escapeHtml(sourceGuild.id)})</small>` : `<small class="guard-inline-hint">管理記録に使用できるサーバーがありません。</small>`}
+        </article>
+        ${renderGuardAbuseOwnerQueue(registry)}
+        ${renderGuardRegisteredUsers(registry)}
+        ${approvedCases.length ? `<details class="guard-registry-approved-management"><summary>登録内容の変更・取消</summary><div class="guard-registry-list">${approvedCases.map((item) => renderGuardAbuseCaseCard(item, registry)).join("")}</div></details>` : ""}
+      `}
+    </section>
   `;
 }
 
@@ -9340,37 +9439,55 @@ async function submitGuardAbuseReport(formElement) {
   const sourceGuildId = String(data.get("source_guild_id") ?? "");
   const subjectUserId = normalizeGuardModerationIds(data.get("subject_user_id"))[0] ?? "";
   const reasonText = String(data.get("reason_text") ?? "").trim();
-  const rawEvidenceUrls = String(data.get("evidence_urls") ?? "").split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
   const reportedAltUserIds = normalizeGuardModerationIds(data.get("reported_alt_user_ids"));
-  if (rawEvidenceUrls.length > 20 || rawEvidenceUrls.some((url) => url.length > 1000) || reportedAltUserIds.length > 20) {
-    state.guard.abuseRegistry.error = "証拠URLと別アカウントIDは各20件まで、証拠URLは1件1,000文字までです。";
+  if (reportedAltUserIds.length > 20) {
+    state.guard.abuseRegistry.error = "別アカウントIDは20件までです。";
     render();
     return;
   }
-  const evidenceUrls = rawEvidenceUrls.map(guardSafeEvidenceUrl).filter(Boolean);
-  if (evidenceUrls.length !== rawEvidenceUrls.length) {
-    state.guard.abuseRegistry.error = "証拠URLは有効なHTTP(S) URLを1行に1件ずつ入力してください。";
-    render();
-    return;
-  }
-  if (!guardConfigurableGuilds().some((guild) => guild.id === sourceGuildId) || !subjectUserId || !reasonText || !evidenceUrls.length || data.get("confirmed") !== "on") {
-    state.guard.abuseRegistry.error = "サーバー、対象ユーザーID、具体的な理由、有効な証拠URL、確認チェックを入力してください。";
+  if (!guardConfigurableGuilds().some((guild) => guild.id === sourceGuildId) || !subjectUserId || !reasonText || data.get("confirmed") !== "on") {
+    state.guard.abuseRegistry.error = "サーバー、対象ユーザーID、具体的な理由、確認チェックを入力してください。";
     render();
     return;
   }
   if (!window.confirm("この内容をGuardオーナーの審査へ送ります。虚偽報告でないことをもう一度確認してください。")) {
     return;
   }
-  const note = String(data.get("evidence_note") ?? "").trim();
   await mutateGuardAbuseRegistry("/abuse-registry/cases", {
     source_guild_id: sourceGuildId,
     subject_user_id: subjectUserId,
     reason_code: String(data.get("reason_code") ?? "other"),
     reason_text: reasonText,
-    evidence: evidenceUrls.map((url) => ({ type: "message_link", url, note })),
+    evidence: [],
     reported_alt_user_ids: reportedAltUserIds,
     idempotency_key: guardRegistryIdempotencyKey("case"),
   }, "荒らし報告を審査へ送りました。承認されるまでは全体拒否に反映されません。");
+}
+
+async function directRegisterGuardAbuseUser(formElement) {
+  const registry = state.guard.abuseRegistry;
+  if (!registry.is_owner) {
+    return;
+  }
+  const data = new FormData(formElement);
+  const subjectUserId = normalizeGuardModerationIds(data.get("subject_user_id"))[0] ?? "";
+  const sourceGuild = activeGuardSelectedGuild() ?? guardConfigurableGuilds()[0] ?? null;
+  if (!subjectUserId || !sourceGuild) {
+    registry.error = "有効なDiscordユーザーIDと管理記録用サーバーが必要です。";
+    render();
+    return;
+  }
+  if (!window.confirm(`${subjectUserId} を申請なしで荒らし登録します。ユーザーIDに間違いがないことを確認しましたか？`)) {
+    return;
+  }
+  const saved = await mutateGuardAbuseRegistry("/abuse-registry/direct", {
+    source_guild_id: sourceGuild.id,
+    subject_user_id: subjectUserId,
+    idempotency_key: guardRegistryIdempotencyKey("direct"),
+  }, `${subjectUserId} を直接登録しました。`);
+  if (saved) {
+    formElement.reset();
+  }
 }
 
 async function submitGuardAbuseAppeal(formElement) {
@@ -9416,7 +9533,7 @@ async function reviewGuardAbuseCase(actionElement) {
     return;
   }
   const labels = { approve: "承認して全体拒否へ反映", reject: "報告を却下", revoke: "承認済み登録を取消", add_alt: "別アカウントを追加", remove_alt: "別アカウントを削除" };
-  if (!window.confirm(`${labels[action]}します。対象と証拠を確認しましたか？`)) {
+  if (!window.confirm(`${labels[action]}します。対象IDと報告内容を確認しましたか？`)) {
     return;
   }
   const body = { action, reason };
@@ -12120,6 +12237,7 @@ function renderGuardHostAdminPanel() {
         ${renderMetricTile("API接続", state.guard.source === "api" ? "接続中" : "未接続", state.guard.health?.api_contract_version || "未取得", state.guard.source === "api")}
         ${renderMetricTile("Security Log", status.security_log_enabled ? "有効" : "無効", status.security_log_path, status.security_log_enabled)}
       </div>
+      ${renderGuardAbuseAdminPanel()}
       ${renderAdminGuildAccessPanel({
         botLabel: "Discat Guard",
         guilds: status.guilds ?? [],
@@ -12730,7 +12848,7 @@ function loadActiveGuardFeatureData() {
   if (state.activeProduct !== "guard") {
     return;
   }
-  if (activeGuardFeature().id === "abuse-registry") {
+  if (["abuse-registry", "admin"].includes(activeGuardFeature().id)) {
     void loadGuardAbuseRegistry();
     return;
   }
@@ -12878,6 +12996,9 @@ function handleSubmit(event) {
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-report-form]")) {
     event.preventDefault();
     void submitGuardAbuseReport(target);
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-direct-form]")) {
+    event.preventDefault();
+    void directRegisterGuardAbuseUser(target);
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-appeal-form]")) {
     event.preventDefault();
     void submitGuardAbuseAppeal(target);
