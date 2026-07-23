@@ -41,6 +41,32 @@
   height: 0;
 }
 
+.guild-list,
+.guild-list__body,
+.function-sidebar__items,
+.workspace-guide {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--cyan) 38%, transparent) transparent;
+}
+
+.guild-list::-webkit-scrollbar,
+.guild-list__body::-webkit-scrollbar,
+.function-sidebar__items::-webkit-scrollbar,
+.workspace-guide::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.guild-list::-webkit-scrollbar-thumb,
+.guild-list__body::-webkit-scrollbar-thumb,
+.function-sidebar__items::-webkit-scrollbar-thumb,
+.workspace-guide::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cyan) 38%, transparent);
+  background-clip: padding-box;
+}
+
 html,
 body,
 #root {
@@ -446,10 +472,51 @@ button:disabled {
 
 .guild-list__toggle {
   display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 820;
+}
+
+.guild-list__toggle .svg-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .guild-list__mobile-summary {
   display: none;
+  gap: 3px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.guild-list__mobile-summary span,
+.guild-list__mobile-summary small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guild-list__mobile-summary strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.94rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace {
@@ -5940,7 +6007,8 @@ input[type="checkbox"]:checked::before {
 
 .guard-moderation-foundation-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  align-items: start;
   gap: 14px;
 }
 
@@ -5960,7 +6028,7 @@ input[type="checkbox"]:checked::before {
 }
 
 .guard-moderation-card__fields {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 14px;
 }
 
@@ -6409,7 +6477,14 @@ input[type="checkbox"]:checked::before {
 
   .dashboard-grid:not(.dashboard-grid--user):not(.dashboard-grid--guard-auth) .guild-list {
     position: static;
+    max-height: none;
     margin-top: 0;
+    overflow: visible;
+    overscroll-behavior: auto;
+  }
+
+  .dashboard-grid:not(.dashboard-grid--user):not(.dashboard-grid--guard-auth) .guild-list__toggle {
+    display: inline-flex;
   }
 
   .dashboard-grid:not(.dashboard-grid--user):not(.dashboard-grid--guard-auth) .guild-list__body {
@@ -6420,6 +6495,14 @@ input[type="checkbox"]:checked::before {
     padding-right: 2px;
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+
+  .dashboard-grid:not(.dashboard-grid--user):not(.dashboard-grid--guard-auth) .guild-list--collapsed .guild-list__body {
+    display: none;
+  }
+
+  .dashboard-grid:not(.dashboard-grid--user):not(.dashboard-grid--guard-auth) .guild-list--collapsed .guild-list__mobile-summary {
+    display: grid;
   }
 }
 
@@ -6683,7 +6766,7 @@ input[type="checkbox"]:checked::before {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .dashboard-grid {
+  .dashboard-grid:not(.dashboard-grid--user):not(.dashboard-grid--guard-auth) {
     grid-template-areas:
       "guild-list"
       "workspace";
@@ -6831,22 +6914,6 @@ input[type="checkbox"]:checked::before {
 
   .guild-list__toggle {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 34px;
-    gap: 6px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0 10px;
-    background: rgba(255, 255, 255, 0.055);
-    color: var(--text);
-    font-size: 0.78rem;
-    font-weight: 820;
-  }
-
-  .guild-list__toggle .svg-icon {
-    width: 16px;
-    height: 16px;
   }
 
   .guild-list--collapsed .guild-list__body {
@@ -6855,31 +6922,6 @@ input[type="checkbox"]:checked::before {
 
   .guild-list--collapsed .guild-list__mobile-summary {
     display: grid;
-    gap: 3px;
-    margin-top: 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px;
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .guild-list__mobile-summary span,
-  .guild-list__mobile-summary small {
-    overflow: hidden;
-    color: var(--muted);
-    font-size: 0.74rem;
-    font-weight: 760;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .guild-list__mobile-summary strong {
-    overflow: hidden;
-    color: var(--text);
-    font-size: 0.94rem;
-    font-weight: 850;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .workspace__title {
@@ -7155,15 +7197,18 @@ input[type="checkbox"]:checked::before {
   }
 
   .function-sidebar__items {
-    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .function-nav-entry {
+    flex-basis: min(76vw, 230px);
   }
 
   .function-nav-item {
     min-height: 68px;
     grid-template-columns: 18px minmax(0, 1fr);
     gap: 8px;
-    padding: 10px 34px 10px 10px;
+    padding: 10px;
   }
 
   .function-nav-item .svg-icon {
@@ -7351,12 +7396,46 @@ input[type="checkbox"]:checked::before {
 }
 
 .guard-rule-level input[type="radio"] {
+  display: grid;
+  appearance: none;
   width: 18px;
   height: 18px;
   min-height: 18px;
+  place-content: center;
   margin: 1px 0 0;
+  border: 2px solid color-mix(in srgb, var(--muted-2) 74%, transparent);
+  border-radius: 50%;
   padding: 0;
-  accent-color: var(--cyan);
+  background: transparent;
+  box-shadow: none;
+}
+
+.guard-rule-level input[type="radio"]::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--cyan) 44%, transparent);
+  content: "";
+  transform: scale(0);
+  transition: transform 140ms ease;
+}
+
+.guard-rule-level input[type="radio"]:checked {
+  border-color: var(--cyan);
+  background: transparent;
+}
+
+.guard-rule-level input[type="radio"]:checked::before {
+  transform: scale(1);
+}
+
+.guard-rule-level input[type="radio"]:focus,
+.guard-rule-level input[type="radio"]:focus-visible {
+  border-color: var(--cyan);
+  background: transparent;
+  outline: 0;
+  box-shadow: none;
 }
 
 .guard-rule-level--selected {
