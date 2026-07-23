@@ -1019,6 +1019,7 @@ const state = {
     adminPlaylists: 0,
     serviceStatus: 0,
     playlist: 0,
+    playlistImport: 0,
     activity: 0,
     rankings: 0,
     guard: 0,
@@ -1029,6 +1030,8 @@ const state = {
     rolePanel: 0,
   },
 };
+
+let playlistImportAbortController = null;
 
 const root = document.getElementById("root");
 const turnstileCompactMediaQuery = window.matchMedia("(max-width: 380px)");
@@ -1896,6 +1899,135 @@ async function request(path, init = {}, options = {}) {
   return payload;
 }
 
+async function requestPlaylistImportStream(url, onEvent) {
+  const headers = new Headers({
+    Accept: "text/event-stream",
+    "Content-Type": "application/json",
+  });
+  const token = getAuthToken();
+  const trustedApiBase = isAllowedOneApiBase(API_BASE_URL);
+  if (trustedApiBase && token) {
+    headers.set("Authorization", "Bearer " + token);
+  }
+  const sentCurrentAuthToken = Boolean(
+    trustedApiBase && token && headers.get("Authorization") === "Bearer " + token,
+  );
+  const controller = new AbortController();
+  playlistImportAbortController?.abort();
+  playlistImportAbortController = controller;
+
+  try {
+    const response = await fetch(API_BASE_URL + "/playlist/tracks/import/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ url }),
+      credentials: "omit",
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    const requestId = response.headers.get("x-request-id") ?? undefined;
+    if (!response.ok) {
+      const payload = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
+      if (response.status === 401 && sentCurrentAuthToken && token === getAuthToken()) {
+        clearAuthToken();
+        resetSessionState();
+      }
+      throw new ApiError(
+        response.status,
+        apiErrorMessage(response.status, payload),
+        requestId,
+        apiErrorCode(response.status, payload),
+      );
+    }
+    if (!response.body) {
+      throw new ApiError(502, "取込の進捗を受信できませんでした。", requestId, "INVALID_RESPONSE");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result = null;
+    const consumeEvent = (frame) => {
+      const event = parsePlaylistImportStreamEvent(frame);
+      if (!event) {
+        return;
+      }
+      if (event.type === "error") {
+        const detail = isObject(event.payload) && typeof event.payload.detail === "string"
+          ? event.payload.detail
+          : "プレイリストの取込に失敗しました。";
+        const statusCode = isObject(event.payload) && Number.isInteger(event.payload.status_code)
+          ? event.payload.status_code
+          : 500;
+        throw new ApiError(statusCode, detail, requestId, "PLAYLIST_IMPORT_FAILED");
+      }
+      onEvent?.(event.type, event.payload);
+      if (event.type === "complete") {
+        result = event.payload;
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() ?? "";
+        frames.forEach(consumeEvent);
+      }
+      if (done) {
+        break;
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      consumeEvent(buffer);
+    }
+    if (!result) {
+      throw new ApiError(502, "取込完了の応答を受信できませんでした。", requestId, "INVALID_RESPONSE");
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    const aborted = error instanceof DOMException && error.name === "AbortError";
+    throw new ApiError(
+      0,
+      aborted
+        ? "プレイリスト取込を中止しました。"
+        : "プレイリスト取込中に通信エラーが発生しました。",
+      undefined,
+      aborted ? "REQUEST_ABORTED" : "NETWORK_UNREACHABLE",
+    );
+  } finally {
+    if (playlistImportAbortController === controller) {
+      playlistImportAbortController = null;
+    }
+  }
+}
+
+function parsePlaylistImportStreamEvent(frame) {
+  let type = "message";
+  const dataLines = [];
+  for (const line of String(frame ?? "").split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      type = line.slice("event:".length).trim() || "message";
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+  const rawPayload = dataLines.join("\n").trim();
+  if (!rawPayload) {
+    return null;
+  }
+  try {
+    return { type, payload: JSON.parse(rawPayload) };
+  } catch {
+    throw new ApiError(502, "取込の進捗データを読み取れませんでした。", undefined, "INVALID_RESPONSE");
+  }
+}
+
 function apiErrorMessage(status, payload) {
   const detail = isObject(payload) ? payload.detail : undefined;
   if (typeof detail === "string" && detail.trim()) {
@@ -1964,15 +2096,7 @@ const api = {
       {},
       { timeoutMs: 90000 },
     ),
-  importPlaylistUrl: (url) =>
-    request(
-      "/playlist/tracks/import",
-      {
-        method: "POST",
-        body: JSON.stringify({ url }),
-      },
-      { timeoutMs: 300000 },
-    ),
+  importPlaylistUrlStream: (url, onEvent) => requestPlaylistImportStream(url, onEvent),
   uploadPlaylistAudio: (filename, contentBase64) =>
     request(
       "/playlist/tracks/upload",
@@ -2685,6 +2809,9 @@ async function searchPlaylistTracks(query = state.playlistUrl.trim()) {
 }
 
 async function addPlaylistUrl(url = state.playlistUrl.trim(), options = {}) {
+  if (state.playlistSaving) {
+    return;
+  }
   const cleanedUrl = url.trim();
   if (!cleanedUrl) {
     state.playlistError = "追加するURLを指定してください。";
@@ -2692,20 +2819,60 @@ async function addPlaylistUrl(url = state.playlistUrl.trim(), options = {}) {
     render();
     return;
   }
+  const requestId = state.requestIds.playlistImport + 1;
+  state.requestIds.playlistImport = requestId;
   state.playlistSaving = true;
   state.playlistError = null;
   state.playlistMessage = null;
-  render();
+  state.playlistImportProgress = normalizePlaylistImportProgress({
+    source: "url",
+    phase: "resolving",
+    total: null,
+    processed: 0,
+    importedCount: 0,
+    skippedCount: 0,
+    provider: "プレイリスト",
+  });
+  render({ force: true });
   try {
-    const result = await api.importPlaylistUrl(cleanedUrl);
+    const result = await api.importPlaylistUrlStream(cleanedUrl, (event, payload) => {
+      if (requestId !== state.requestIds.playlistImport || event !== "progress") {
+        return;
+      }
+      state.playlistImportProgress = normalizePlaylistImportProgress({
+        ...payload,
+        source: "url",
+      });
+      render({ force: true });
+    });
+    if (requestId !== state.requestIds.playlistImport) {
+      return;
+    }
     const playlist = result?.playlist ?? result;
     state.playlist = normalizePlaylist(playlist);
-    const importedCount = Number(result?.imported_count ?? 1);
+    const importedCount = Number(result?.imported_count ?? 0);
+    const skippedCount = Number(result?.skipped_count ?? 0);
     const provider = String(result?.provider ?? "プレイリスト");
-    state.playlistMessage =
-      importedCount > 1
-        ? `${provider}から${importedCount}曲をプレイリストに取り込みました。`
-        : "プレイリストに追加しました。";
+    const reportedTotal = Number(result?.total_count ?? result?.totalCount ?? state.playlistImportProgress?.total);
+    const completedTotal = Number.isFinite(reportedTotal) && reportedTotal > 0
+      ? Math.floor(reportedTotal)
+      : state.playlistImportProgress?.total ?? null;
+    state.playlistImportProgress = normalizePlaylistImportProgress({
+      ...state.playlistImportProgress,
+      source: "url",
+      phase: "complete",
+      total: completedTotal,
+      processed: completedTotal ?? state.playlistImportProgress?.processed ?? 0,
+      importedCount,
+      skippedCount,
+      provider,
+    });
+    if (importedCount > 0) {
+      state.playlistMessage = provider + "から" + importedCount + "曲をプレイリストに取り込みました。"
+        + (skippedCount > 0 ? " " + skippedCount + "曲は追加できませんでした。" : "");
+    } else {
+      state.playlistError = "取り込める新しい曲が見つかりませんでした。";
+    }
     if (options.clearInput) {
       state.playlistUrl = "";
     }
@@ -2714,11 +2881,39 @@ async function addPlaylistUrl(url = state.playlistUrl.trim(), options = {}) {
       state.playlistSearchQuery = "";
     }
   } catch (error) {
-    state.playlistError = error instanceof Error ? error.message : "URLの登録に失敗しました。";
+    if (requestId === state.requestIds.playlistImport) {
+      state.playlistError = error instanceof Error ? error.message : "URLの登録に失敗しました。";
+      state.playlistImportProgress = normalizePlaylistImportProgress({
+        ...state.playlistImportProgress,
+        source: "url",
+        phase: "failed",
+      });
+    }
   } finally {
-    state.playlistSaving = false;
-    render();
+    if (requestId === state.requestIds.playlistImport) {
+      state.playlistSaving = false;
+      render({ force: true });
+    }
   }
+}
+
+function normalizePlaylistImportProgress(progress) {
+  const rawTotal = Number(progress?.total);
+  const total = Number.isFinite(rawTotal) && rawTotal > 0 ? Math.floor(rawTotal) : null;
+  const rawProcessed = Number(progress?.processed ?? progress?.current ?? 0);
+  const processed = Math.max(0, Math.min(total ?? Number.MAX_SAFE_INTEGER, Number.isFinite(rawProcessed) ? Math.floor(rawProcessed) : 0));
+  const rawImported = Number(progress?.importedCount ?? progress?.imported_count ?? 0);
+  const rawSkipped = Number(progress?.skippedCount ?? progress?.skipped_count ?? progress?.failedCount ?? 0);
+  return {
+    source: progress?.source === "upload" ? "upload" : "url",
+    phase: String(progress?.phase ?? "resolving"),
+    total,
+    processed,
+    importedCount: Math.max(0, Number.isFinite(rawImported) ? Math.floor(rawImported) : 0),
+    skippedCount: Math.max(0, Number.isFinite(rawSkipped) ? Math.floor(rawSkipped) : 0),
+    currentTitle: String(progress?.currentTitle ?? progress?.current_title ?? progress?.filename ?? "").trim(),
+    provider: String(progress?.provider ?? "プレイリスト").trim() || "プレイリスト",
+  };
 }
 
 async function addPlaylistSearchResult(url) {
@@ -2770,13 +2965,27 @@ async function uploadPlaylistFiles(files) {
   state.playlistMessage = null;
   let uploadedCount = 0;
   const failures = [];
+  state.playlistImportProgress = normalizePlaylistImportProgress({
+    source: "upload",
+    phase: "uploading",
+    total: selectedFiles.length,
+    processed: 0,
+    importedCount: 0,
+    skippedCount: 0,
+    provider: "音声ファイル",
+  });
   try {
     for (const [index, file] of selectedFiles.entries()) {
-      state.playlistImportProgress = {
-        current: index + 1,
+      state.playlistImportProgress = normalizePlaylistImportProgress({
+        source: "upload",
+        phase: "uploading",
         total: selectedFiles.length,
+        processed: index,
+        importedCount: uploadedCount,
+        skippedCount: failures.length,
         filename: file.name,
-      };
+        provider: "音声ファイル",
+      });
       render();
       try {
         const contentBase64 = await readFileAsBase64(file);
@@ -2786,21 +2995,46 @@ async function uploadPlaylistFiles(files) {
       } catch (error) {
         failures.push(error instanceof Error ? error.message : `${file.name}を登録できませんでした。`);
       }
+      state.playlistImportProgress = normalizePlaylistImportProgress({
+        source: "upload",
+        phase: "uploading",
+        total: selectedFiles.length,
+        processed: index + 1,
+        importedCount: uploadedCount,
+        skippedCount: failures.length,
+        filename: file.name,
+        provider: "音声ファイル",
+      });
+      render();
     }
 
     if (uploadedCount) {
+      state.playlistImportProgress = normalizePlaylistImportProgress({
+        ...state.playlistImportProgress,
+        source: "upload",
+        phase: "complete",
+        total: selectedFiles.length,
+        processed: selectedFiles.length,
+        importedCount: uploadedCount,
+        skippedCount: failures.length,
+        provider: "音声ファイル",
+      });
       state.playlistMessage =
         failures.length
           ? `${uploadedCount}件の音声ファイルを取り込みました。${failures.length}件は追加できませんでした。`
           : `${uploadedCount}件の音声ファイルをプレイリストに取り込みました。`;
     } else {
       state.playlistError = failures[0] ?? "音声ファイルの登録に失敗しました。";
+      state.playlistImportProgress = normalizePlaylistImportProgress({
+        ...state.playlistImportProgress,
+        source: "upload",
+        phase: "failed",
+      });
     }
   } finally {
     state.playlistSaving = false;
     state.playlistDragActive = false;
-    state.playlistImportProgress = null;
-    render();
+    render({ force: true });
   }
 }
 
@@ -4874,12 +5108,15 @@ function resetGuardAuthenticatedState() {
 }
 
 function resetSessionState() {
+  playlistImportAbortController?.abort();
+  playlistImportAbortController = null;
   state.requestIds.account += 1;
   state.requestIds.guildData += 1;
   state.requestIds.save += 1;
   state.requestIds.host += 1;
   state.requestIds.adminPlaylists += 1;
   state.requestIds.playlist += 1;
+  state.requestIds.playlistImport += 1;
   state.requestIds.activity += 1;
   state.requestIds.rankings += 1;
   state.requestIds.guildOptions += 1;
@@ -10799,12 +11036,83 @@ function renderActivitySparkline(points, metric, lineClass) {
   `;
 }
 
+function renderPlaylistImportProgress(progress) {
+  if (!progress) {
+    return "";
+  }
+  const isUpload = progress.source === "upload";
+  const unit = isUpload ? "件" : "曲";
+  const total = Number.isFinite(progress.total) && progress.total > 0 ? progress.total : null;
+  const processed = Math.max(0, Math.min(total ?? Number.MAX_SAFE_INTEGER, Number(progress.processed) || 0));
+  const percent = total ? Math.round((processed / total) * 100) : 0;
+  const provider = progress.provider || (isUpload ? "音声ファイル" : "プレイリスト");
+  const isDiscovering = ["discovering", "resolving"].includes(progress.phase);
+  const isComplete = progress.phase === "complete";
+  const isFailed = progress.phase === "failed";
+  const heading = isComplete
+    ? provider + "の取込が完了"
+    : isFailed
+      ? provider + "の取込を完了できませんでした"
+      : isDiscovering
+        ? provider + "の曲数を確認中"
+        : isUpload
+          ? "音声ファイルを登録中"
+          : provider + "の曲を登録中";
+  const counter = isComplete
+    ? total ? total + "/" + total + unit + "を処理済み" : "取込完了"
+    : total ? processed + "/" + total + unit + "を処理済み" : "曲数を確認中";
+  const currentTitle = isComplete
+    ? "すべての曲の登録処理が完了しました。"
+    : isFailed
+      ? "進捗を確認し、もう一度お試しください。"
+      : progress.currentTitle
+        ? "現在: " + progress.currentTitle
+        : isDiscovering
+          ? "公開プレイリストの曲情報を取得しています。"
+          : "曲を順番に登録しています。";
+  const resultCounts = [
+    progress.importedCount > 0 ? "登録 " + progress.importedCount + unit : "",
+    progress.skippedCount > 0 ? "追加できなかった曲 " + progress.skippedCount + unit : "",
+  ].filter(Boolean).join(" · ");
+  const valueAttributes = total
+    ? `aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${processed}"`
+    : `aria-valuetext="曲数を確認中"`;
+  const statusClass = [
+    "playlist-import-progress",
+    total ? "" : "playlist-import-progress--indeterminate",
+    isComplete ? "playlist-import-progress--complete" : "",
+    isFailed ? "playlist-import-progress--failed" : "",
+  ].filter(Boolean).join(" ");
+  const ariaBusy = isComplete || isFailed ? "false" : "true";
+  return `
+    <section class="${statusClass}" role="status" aria-live="polite" aria-busy="${ariaBusy}">
+      <div class="playlist-import-progress__header">
+        <div>
+          <span>プレイリスト取込</span>
+          <strong>${escapeHtml(heading)}</strong>
+        </div>
+        <strong class="playlist-import-progress__counter">${escapeHtml(counter)}</strong>
+      </div>
+      <div class="playlist-import-progress__bar" role="progressbar" aria-label="${escapeAttribute(heading)}" ${valueAttributes}>
+        <i style="--playlist-import-progress: ${escapeAttribute(String(percent))}%"></i>
+      </div>
+      <p>${escapeHtml(currentTitle)}${resultCounts ? ` <span>${escapeHtml(resultCounts)}</span>` : ""}</p>
+    </section>
+  `;
+}
+
 function renderPlaylistPanel(playlist) {
   const tracks = playlist.tracks ?? [];
-  const uploadProgress = state.playlistImportProgress;
+  const importProgress = state.playlistImportProgress;
+  const uploadProgress = importProgress?.source === "upload" ? importProgress : null;
   const uploadDescription = uploadProgress
-    ? `${uploadProgress.current}/${uploadProgress.total}件を取り込み中: ${uploadProgress.filename}`
-    : "音声ファイルをまとめてドラッグアンドドロップ";
+    ? uploadProgress.phase === "complete"
+      ? uploadProgress.importedCount + "/" + uploadProgress.total + "件の音声ファイルを取り込みました。"
+      : uploadProgress.phase === "failed"
+        ? "音声ファイルの取込に失敗しました。"
+        : Math.min(uploadProgress.total ?? 0, uploadProgress.processed + 1) + "/" + uploadProgress.total
+          + "件を取り込み中: " + (uploadProgress.currentTitle || "音声ファイル")
+   : "音声ファイルをまとめてドラッグアンドドロップ";
   return `
     <section class="feature-card playlist-panel" aria-label="プレイリスト">
       <div class="feature-card__header playlist-panel__header">
@@ -10813,7 +11121,7 @@ function renderPlaylistPanel(playlist) {
         </div>
         <div class="feature-card__actions">
           <span class="feature-status ${tracks.length ? "feature-status--on" : ""}">${tracks.length}曲</span>
-          <button class="icon-button icon-button--ghost" type="button" data-action="playlist-refresh" ${state.playlistLoading ? "disabled" : ""}>
+          <button class="icon-button icon-button--ghost" type="button" data-action="playlist-refresh" ${state.playlistLoading || state.playlistSaving ? "disabled" : ""}>
             ${icon("refresh")}<span>${state.playlistLoading ? "更新中" : "更新"}</span>
           </button>
         </div>
@@ -10829,6 +11137,7 @@ function renderPlaylistPanel(playlist) {
         </button>
       </form>
       ${renderPlaylistSearchResults()}
+      ${renderPlaylistImportProgress(importProgress)}
       <div class="playlist-drop-zone ${state.playlistDragActive ? "playlist-drop-zone--active" : ""}" data-playlist-drop-zone>
         <input type="file" accept="${PLAYLIST_AUDIO_FILE_ACCEPT}" multiple data-playlist-file-input hidden />
         <div>

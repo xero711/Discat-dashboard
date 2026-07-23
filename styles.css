@@ -2266,6 +2266,112 @@ button:disabled {
   min-height: 76px;
 }
 
+.playlist-import-progress {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(111, 232, 255, 0.3);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background:
+    linear-gradient(100deg, rgba(111, 232, 255, 0.12), transparent 55%),
+    rgba(17, 9, 30, 0.42);
+}
+
+.playlist-import-progress__header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.playlist-import-progress__header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.playlist-import-progress__header span,
+.playlist-import-progress p {
+  color: var(--muted-2);
+  font-size: 0.78rem;
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.playlist-import-progress__header strong {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 0.94rem;
+  font-weight: 820;
+}
+
+.playlist-import-progress__counter {
+  flex: 0 0 auto;
+  color: var(--cyan) !important;
+  font-size: 0.8rem !important;
+  white-space: nowrap;
+}
+
+.playlist-import-progress__bar {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(244, 218, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(8, 4, 18, 0.54);
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.26);
+}
+
+.playlist-import-progress__bar i {
+  display: block;
+  width: var(--playlist-import-progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--pink));
+  box-shadow: 0 0 16px rgba(111, 232, 255, 0.38);
+  transition: width 220ms ease;
+}
+
+.playlist-import-progress p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.playlist-import-progress p span {
+  color: var(--success);
+}
+
+.playlist-import-progress--indeterminate .playlist-import-progress__bar i {
+  width: 38%;
+  animation: playlist-import-indeterminate 1.1s ease-in-out infinite;
+}
+
+.playlist-import-progress--complete {
+  border-color: rgba(117, 245, 186, 0.42);
+}
+
+.playlist-import-progress--failed {
+  border-color: rgba(255, 111, 145, 0.48);
+}
+
+.playlist-import-progress--failed .playlist-import-progress__counter,
+.playlist-import-progress--failed p span {
+  color: var(--danger) !important;
+}
+
+@keyframes playlist-import-indeterminate {
+  from {
+    transform: translateX(-115%);
+  }
+
+  to {
+    transform: translateX(315%);
+  }
+}
+
 .playlist-search-results {
   display: grid;
   gap: 10px;
