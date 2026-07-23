@@ -31,6 +31,10 @@ const TRANSIENT_LOADING_DELAY_MS = 280;
 const CONNECTION_LOADING_EXIT_MS = 180;
 const TURNSTILE_CONFIG_CACHE_MS = 5 * 60 * 1000;
 const PLAYLIST_PREVIEW_DURATION_SECONDS = 15;
+const PLAYLIST_MAX_TRACKS = 100;
+const PLAYLIST_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const PLAYLIST_AUDIO_FILE_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"]);
+const PLAYLIST_AUDIO_FILE_ACCEPT = ".mp3,.wav,.ogg,.m4a,.flac,.aac,.opus";
 const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 const TURNSTILE_PROOF_STORAGE_KEY = "discat_one_turnstile_proof";
 const TURNSTILE_PROOF_SCOPE_STORAGE_KEY = "discat_one_turnstile_proof_scope";
@@ -177,14 +181,14 @@ const HOST_DATABASE_CATEGORIES = [
 ];
 const SERVER_DEFAULT_PAGE = "welcome-message";
 const ACTIVITY_PERIODS = [
-  { id: "daily", label: "日別", summary: "直近7日" },
-  { id: "weekly", label: "週別", summary: "直近8週" },
-  { id: "monthly", label: "月別", summary: "直近6か月" },
+  { id: "daily", label: "日", summary: "今日" },
+  { id: "weekly", label: "週", summary: "直近7日間" },
+  { id: "monthly", label: "月", summary: "直近1か月" },
 ];
 const ACTIVITY_POINT_LIMITS = {
-  daily: 7,
-  weekly: 8,
-  monthly: 6,
+  daily: 1,
+  weekly: 7,
+  monthly: 32,
 };
 const RANKING_PERIODS = [
   { id: "daily", label: "日", summary: "今日" },
@@ -236,6 +240,8 @@ const WELCOME_MESSAGE_TOKENS = WELCOME_MESSAGE_TOKEN_GROUPS.flatMap((group) => g
 const TICKET_PANEL_DEFAULT_TITLE = "お問い合わせ・サポート";
 const TICKET_PANEL_DEFAULT_DESCRIPTION = "困ったことがある場合は、下のボタンからチケットを作成してください。\nスタッフが順番に対応します。";
 const TICKET_CALL_COOLDOWN_MINUTES_DEFAULT = 30;
+const ROLE_PANEL_DEFAULT_THEME = "ロールを選択";
+const ROLE_PANEL_MAX_OPTIONS = 20;
 
 const SETTINGS_PAGES = [
   {
@@ -290,6 +296,15 @@ const SETTINGS_PAGES = [
     description: "問い合わせチャンネルとスタッフ対応",
     help: "カテゴリ、スタッフロール、ログチャンネル、パネル送信先を設定し、ダッシュボードからチケットパネルを送信できます。",
     icon: "ticket",
+    view: "features",
+  },
+  {
+    id: "role-panel",
+    label: "ロールパネル",
+    eyebrow: "ロール",
+    description: "リアクションでロールを切り替え",
+    help: "絵文字とロールを組み合わせ、パネルのリアクションで付与・解除できるようにします。操作結果はチャンネルに10秒間だけ表示されます。",
+    icon: "shield",
     view: "features",
   },
   {
@@ -825,6 +840,7 @@ const state = {
   playlistSearchResults: [],
   playlistSearchQuery: "",
   playlistDragActive: false,
+  playlistImportProgress: null,
   userActivity: null,
   userActivityLoading: false,
   userActivityError: null,
@@ -856,6 +872,7 @@ const state = {
   loading: false,
   saving: false,
   ticketPanelPublishing: false,
+  rolePanelPublishing: false,
   message: null,
   operationNotice: null,
   guildDataError: null,
@@ -1009,6 +1026,7 @@ const state = {
     guardPublicStatus: 0,
     guildOptions: 0,
     ticketPanel: 0,
+    rolePanel: 0,
   },
 };
 
@@ -1022,6 +1040,7 @@ let guildOptionsRefreshInFlight = false;
 let guildOptionsRenderPending = false;
 let guardDataLoadPromise = null;
 let guardDataRetryTimerId = null;
+let productTransitionTimerId = null;
 const dashboardAccessRequests = new Map();
 const dashboardAccessLoggedInMemory = new Set();
 let turnstileScriptPromise = null;
@@ -1373,8 +1392,33 @@ function normalizeOnePageId(pageId) {
 }
 
 function renderProductTransition(fromProduct, toProduct) {
-  state.productTransition = null;
+  if (productTransitionTimerId) {
+    window.clearTimeout(productTransitionTimerId);
+    productTransitionTimerId = null;
+  }
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!prefersReducedMotion && typeof document.startViewTransition === "function") {
+    state.productTransition = { from: fromProduct, to: toProduct, rendered: true };
+    const transition = document.startViewTransition(() => render());
+    transition.finished
+      .catch(() => undefined)
+      .finally(() => {
+        if (state.productTransition?.from === fromProduct && state.productTransition?.to === toProduct) {
+          state.productTransition = null;
+        }
+      });
+    return;
+  }
+
+  state.productTransition = { from: fromProduct, to: toProduct, rendered: false };
   render();
+  productTransitionTimerId = window.setTimeout(() => {
+    productTransitionTimerId = null;
+    if (state.productTransition?.from === fromProduct && state.productTransition?.to === toProduct) {
+      state.productTransition = null;
+    }
+  }, 520);
 }
 
 async function loadOneDashboardData() {
@@ -1920,16 +1964,16 @@ const api = {
       {},
       { timeoutMs: 90000 },
     ),
-  addPlaylistUrl: (url) =>
+  importPlaylistUrl: (url) =>
     request(
-      "/playlist/tracks/url",
+      "/playlist/tracks/import",
       {
         method: "POST",
         body: JSON.stringify({ url }),
       },
-      { timeoutMs: 90000 },
+      { timeoutMs: 300000 },
     ),
-  uploadPlaylistMp3: (filename, contentBase64) =>
+  uploadPlaylistAudio: (filename, contentBase64) =>
     request(
       "/playlist/tracks/upload",
       {
@@ -1971,6 +2015,11 @@ const api = {
     }),
   publishTicketPanel: (guildId, channelId) =>
     request(`/guilds/${encodeURIComponent(guildId)}/ticket-panel`, {
+      method: "POST",
+      body: JSON.stringify({ channel_id: normalizeNullableString(channelId) }),
+    }),
+  publishRolePanel: (guildId, channelId) =>
+    request(`/guilds/${encodeURIComponent(guildId)}/role-panel`, {
       method: "POST",
       body: JSON.stringify({ channel_id: normalizeNullableString(channelId) }),
     }),
@@ -2648,9 +2697,15 @@ async function addPlaylistUrl(url = state.playlistUrl.trim(), options = {}) {
   state.playlistMessage = null;
   render();
   try {
-    const playlist = await api.addPlaylistUrl(cleanedUrl);
+    const result = await api.importPlaylistUrl(cleanedUrl);
+    const playlist = result?.playlist ?? result;
     state.playlist = normalizePlaylist(playlist);
-    state.playlistMessage = "プレイリストに追加しました。";
+    const importedCount = Number(result?.imported_count ?? 1);
+    const provider = String(result?.provider ?? "プレイリスト");
+    state.playlistMessage =
+      importedCount > 1
+        ? `${provider}から${importedCount}曲をプレイリストに取り込みました。`
+        : "プレイリストに追加しました。";
     if (options.clearInput) {
       state.playlistUrl = "";
     }
@@ -2670,31 +2725,90 @@ async function addPlaylistSearchResult(url) {
   await addPlaylistUrl(url, { clearInput: true, clearSearch: true });
 }
 
-async function uploadPlaylistFile(file) {
-  if (!file) {
+async function uploadPlaylistFiles(files) {
+  if (state.playlistSaving) {
     return;
   }
-  if (!file.name.toLowerCase().endsWith(".mp3")) {
-    state.playlistError = "mp3ファイルを選択してください。";
+  const selectedFiles = Array.from(files ?? []).filter((file) => file && typeof file.name === "string");
+  if (!selectedFiles.length) {
+    return;
+  }
+
+  const unsupportedFiles = selectedFiles.filter((file) => !playlistAudioFileExtension(file));
+  if (unsupportedFiles.length) {
+    state.playlistError = `対応していない形式のファイルがあります: ${unsupportedFiles.map((file) => file.name).join("、")}`;
     state.playlistMessage = null;
     render();
     return;
   }
+
+  const oversizedFiles = selectedFiles.filter((file) => Number(file.size ?? 0) > PLAYLIST_MAX_UPLOAD_BYTES);
+  if (oversizedFiles.length) {
+    state.playlistError = `1ファイル25MBまでです: ${oversizedFiles.map((file) => file.name).join("、")}`;
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+
+  const currentTrackCount = state.playlist?.tracks?.length ?? 0;
+  const availableSlots = Math.max(0, PLAYLIST_MAX_TRACKS - currentTrackCount);
+  if (!availableSlots) {
+    state.playlistError = `プレイリストは${PLAYLIST_MAX_TRACKS}曲までです。追加するには曲を削除してください。`;
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+  if (selectedFiles.length > availableSlots) {
+    state.playlistError = `追加できるのは残り${availableSlots}曲です。選択するファイル数を減らしてください。`;
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+
   state.playlistSaving = true;
   state.playlistError = null;
   state.playlistMessage = null;
-  render();
+  let uploadedCount = 0;
+  const failures = [];
   try {
-    const contentBase64 = await readFileAsBase64(file);
-    const playlist = await api.uploadPlaylistMp3(file.name, contentBase64);
-    state.playlist = normalizePlaylist(playlist);
-  } catch (error) {
-    state.playlistError = error instanceof Error ? error.message : "mp3の登録に失敗しました。";
+    for (const [index, file] of selectedFiles.entries()) {
+      state.playlistImportProgress = {
+        current: index + 1,
+        total: selectedFiles.length,
+        filename: file.name,
+      };
+      render();
+      try {
+        const contentBase64 = await readFileAsBase64(file);
+        const playlist = await api.uploadPlaylistAudio(file.name, contentBase64);
+        state.playlist = normalizePlaylist(playlist);
+        uploadedCount += 1;
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : `${file.name}を登録できませんでした。`);
+      }
+    }
+
+    if (uploadedCount) {
+      state.playlistMessage =
+        failures.length
+          ? `${uploadedCount}件の音声ファイルを取り込みました。${failures.length}件は追加できませんでした。`
+          : `${uploadedCount}件の音声ファイルをプレイリストに取り込みました。`;
+    } else {
+      state.playlistError = failures[0] ?? "音声ファイルの登録に失敗しました。";
+    }
   } finally {
     state.playlistSaving = false;
     state.playlistDragActive = false;
+    state.playlistImportProgress = null;
     render();
   }
+}
+
+function playlistAudioFileExtension(file) {
+  const filename = String(file?.name ?? "").trim().toLowerCase();
+  const dotIndex = filename.lastIndexOf(".");
+  const extension = dotIndex >= 0 ? filename.slice(dotIndex) : "";
+  return PLAYLIST_AUDIO_FILE_EXTENSIONS.has(extension) ? extension : "";
 }
 
 async function deletePlaylistTrack(trackId) {
@@ -3359,6 +3473,7 @@ function normalizeFeatureSettings(featureSettings) {
     bump_rank: normalizeBumpRankSettings(featureSettings?.bump_rank),
     temporary_voice: normalizeTemporaryVoiceSettings(featureSettings?.temporary_voice),
     ticket: normalizeTicketSettings(featureSettings?.ticket),
+    role_panel: normalizeRolePanelSettings(featureSettings?.role_panel),
   };
 }
 
@@ -3572,6 +3687,24 @@ function normalizeTicketSettings(settings) {
   };
 }
 
+function normalizeRolePanelOption(option) {
+  return {
+    emoji: String(option?.emoji ?? "").trim(),
+    role_id: normalizeNullableString(option?.role_id) ?? "",
+  };
+}
+
+function normalizeRolePanelSettings(settings) {
+  return {
+    channel_id: normalizeNullableString(settings?.channel_id) ?? "",
+    message_id: normalizeNullableString(settings?.message_id) ?? "",
+    theme: String(settings?.theme ?? ROLE_PANEL_DEFAULT_THEME).trim() || ROLE_PANEL_DEFAULT_THEME,
+    options: Array.isArray(settings?.options)
+      ? settings.options.slice(0, ROLE_PANEL_MAX_OPTIONS).map(normalizeRolePanelOption)
+      : [],
+  };
+}
+
 function normalizeBumpRankResetInterval(value) {
   const interval = String(value ?? "none");
   return BUMP_RANK_RESET_INTERVALS.some((item) => item.id === interval) ? interval : "none";
@@ -3647,6 +3780,7 @@ function comparableFeatureSettings(featureSettings) {
   const bumpRank = comparableBumpRankSettings(featureSettings.bump_rank);
   const temporaryVoice = comparableTemporaryVoiceSettings(featureSettings.temporary_voice);
   const ticket = comparableTicketSettings(featureSettings.ticket);
+  const rolePanel = comparableRolePanelSettings(featureSettings.role_panel);
   return {
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
     global_chat_channel_id: normalizeNullableString(featureSettings.global_chat_channel_id),
@@ -3658,6 +3792,7 @@ function comparableFeatureSettings(featureSettings) {
     bump_rank: bumpRank,
     temporary_voice: temporaryVoice,
     ticket,
+    role_panel: rolePanel,
   };
 }
 
@@ -3742,6 +3877,28 @@ function comparableTicketSettings(settings) {
     creator_can_close: normalized.creator_can_close,
     staff_call_cooldown_seconds: normalized.staff_call_cooldown_seconds,
     next_number: normalized.next_number,
+  };
+}
+
+function comparableRolePanelSettings(settings) {
+  const normalized = normalizeRolePanelSettings(settings);
+  const options = normalized.options
+    .filter((option) => option.emoji && option.role_id)
+    .map((option) => ({ emoji: option.emoji, role_id: option.role_id }));
+  const hasAnyValue = Boolean(
+    normalized.channel_id
+      || normalized.message_id
+      || options.length
+      || normalized.theme !== ROLE_PANEL_DEFAULT_THEME,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    channel_id: normalizeNullableString(normalized.channel_id),
+    message_id: normalizeNullableString(normalized.message_id),
+    theme: normalized.theme,
+    options,
   };
 }
 
@@ -4020,6 +4177,10 @@ async function saveFeatureSettings() {
   if (!state.selectedGuildId || !state.featureSettings) {
     return false;
   }
+  if (activeSettingsPage().id === "role-panel" && !validateRolePanelDraft(state.featureSettings.role_panel)) {
+    render();
+    return false;
+  }
   const requestId = state.requestIds.save + 1;
   state.requestIds.save = requestId;
   state.saving = true;
@@ -4111,6 +4272,69 @@ async function publishTicketPanel() {
   }
 }
 
+async function publishRolePanel() {
+  if (!state.selectedGuildId || !state.featureSettings) {
+    return false;
+  }
+  if (!validateRolePanelDraft(state.featureSettings.role_panel)) {
+    render();
+    return false;
+  }
+
+  if (isViewDirty("features")) {
+    const saved = await saveFeatureSettings();
+    if (!saved) {
+      return false;
+    }
+  }
+
+  const rolePanel = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  const optionCount = rolePanel.options.filter((option) => option.emoji && option.role_id).length;
+  if (!rolePanel.channel_id || optionCount === 0) {
+    state.message = "送信先チャンネルと少なくとも1組の絵文字・ロールを設定してください。";
+    render();
+    return false;
+  }
+
+  const requestId = state.requestIds.rolePanel + 1;
+  state.requestIds.rolePanel = requestId;
+  state.rolePanelPublishing = true;
+  state.message = null;
+  state.operationNotice = null;
+  render();
+
+  try {
+    const result = await api.publishRolePanel(state.selectedGuildId, rolePanel.channel_id);
+    if (requestId !== state.requestIds.rolePanel) {
+      return false;
+    }
+    const refreshed = await api.featureSettings(state.selectedGuildId);
+    if (requestId !== state.requestIds.rolePanel) {
+      return false;
+    }
+    rememberSavedFeatureSettings(refreshed);
+    invalidateAuditLogs("one", state.selectedGuildId);
+    state.operationNotice = {
+      tone: "success",
+      title: "✅ ロールパネルを送信しました",
+      message: result?.panel_url
+        ? `ロールパネルを送信しました: ${result.panel_url}`
+        : "ロールパネルを送信しました。",
+    };
+    return true;
+  } catch (error) {
+    if (requestId === state.requestIds.rolePanel) {
+      state.message = error instanceof Error ? error.message : "ロールパネルの送信に失敗しました。";
+    }
+    return false;
+  } finally {
+    if (requestId === state.requestIds.rolePanel) {
+      state.rolePanelPublishing = false;
+      render();
+    }
+  }
+}
+
 function buildFeatureSettingsPatch() {
   const pageId = activeSettingsPage().id;
   if (pageId === "welcome-message") {
@@ -4146,6 +4370,11 @@ function buildFeatureSettingsPatch() {
   if (pageId === "ticket") {
     return {
       ticket: buildTicketPatch(state.featureSettings.ticket),
+    };
+  }
+  if (pageId === "role-panel") {
+    return {
+      role_panel: buildRolePanelPatch(state.featureSettings.role_panel),
     };
   }
   if (["bump-rank", "server-rank"].includes(pageId)) {
@@ -4239,6 +4468,59 @@ function buildTicketPatch(settings) {
     staff_call_cooldown_seconds: normalized.staff_call_cooldown_seconds,
     next_number: normalized.next_number,
   };
+}
+
+function buildRolePanelPatch(settings) {
+  const normalized = normalizeRolePanelSettings(settings);
+  const options = normalized.options
+    .filter((option) => option.emoji && option.role_id)
+    .map((option) => ({ emoji: option.emoji, role_id: option.role_id }));
+  const hasAnyValue = Boolean(
+    normalized.channel_id
+      || normalized.message_id
+      || options.length
+      || normalized.theme !== ROLE_PANEL_DEFAULT_THEME,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    channel_id: normalized.channel_id || null,
+    message_id: normalized.message_id || null,
+    theme: normalized.theme,
+    options,
+  };
+}
+
+function validateRolePanelDraft(settings) {
+  const normalized = normalizeRolePanelSettings(settings);
+  const incomplete = normalized.options.some((option) => Boolean(option.emoji) !== Boolean(option.role_id));
+  if (incomplete) {
+    state.message = "各ロール設定は絵文字とロールをセットで入力してください。";
+    return false;
+  }
+  const seen = new Set();
+  for (const option of normalized.options) {
+    if (!option.emoji || !option.role_id) {
+      continue;
+    }
+    const key = rolePanelEmojiKey(option.emoji);
+    if (seen.has(key)) {
+      state.message = "同じ絵文字は1つのロールにだけ設定してください。";
+      return false;
+    }
+    seen.add(key);
+  }
+  return true;
+}
+
+function rolePanelEmojiKey(emoji) {
+  const value = String(emoji ?? "").trim();
+  const compact = value.replace(/^<|>$/g, "");
+  const parts = compact.split(":");
+  return (parts.length === 2 || parts.length === 3) && /^\d+$/.test(parts.at(-1))
+    ? `custom:${parts.at(-1)}`
+    : `unicode:${value}`;
 }
 
 function buildBumpRankPatch(settings) {
@@ -4602,6 +4884,7 @@ function resetSessionState() {
   state.requestIds.rankings += 1;
   state.requestIds.guildOptions += 1;
   state.requestIds.ticketPanel += 1;
+  state.requestIds.rolePanel += 1;
   state.security.requestId += 1;
   state.security.loading = true;
   state.security.verifying = false;
@@ -4624,6 +4907,7 @@ function resetSessionState() {
   state.ttsOptions = null;
   state.guildDataError = null;
   state.ticketPanelPublishing = false;
+  state.rolePanelPublishing = false;
   state.operationNotice = null;
   state.hostStatus = null;
   state.hostLogs = [];
@@ -4650,6 +4934,7 @@ function resetSessionState() {
   state.playlistSearchResults = [];
   state.playlistSearchQuery = "";
   state.playlistDragActive = false;
+  state.playlistImportProgress = null;
   state.userActivity = null;
   state.userActivityLoading = false;
   state.userActivityError = null;
@@ -5694,6 +5979,57 @@ function currentLoginBlocked() {
   return state.activeProduct === "guard" ? guardLoginBlocked() : loginBlocked();
 }
 
+function renderWorkspaceTitle(eyebrow, title, description, steps = []) {
+  return `
+    <div class="workspace__title">
+      <div class="workspace__title-copy">
+        <span class="workspace__eyebrow">${escapeHtml(eyebrow)}</span>
+        <h2>${escapeHtml(title)}</h2>
+        ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+      </div>
+      ${steps.length ? `
+        <ol class="workspace-guide" aria-label="設定の進め方">
+          ${steps.map((step, index) => `
+            <li>
+              <b>${index + 1}</b>
+              <span>${escapeHtml(step)}</span>
+            </li>
+          `).join("")}
+        </ol>
+      ` : ""}
+    </div>
+  `;
+}
+
+function oneWorkspaceSteps(page, view) {
+  if (view === "user") {
+    return ["タブを選ぶ", "内容を確認・管理"];
+  }
+  if (view === "host") {
+    return ["項目を選ぶ", "稼働状況を確認"];
+  }
+  if (view === "audit") {
+    return ["サーバーを選ぶ", "変更履歴を確認"];
+  }
+  return ["サーバーを選ぶ", `${page.label}を設定`, "変更を保存"];
+}
+
+function guardWorkspaceSteps(feature) {
+  if (feature.id === "admin") {
+    return ["項目を選ぶ", "稼働状況を確認"];
+  }
+  if (feature.id === "abuse-registry") {
+    return ["対象を確認", "内容を入力", "審査へ送信"];
+  }
+  if (feature.id === "audit-log") {
+    return ["サーバーを選ぶ", "変更履歴を確認"];
+  }
+  if (feature.id === "moderation") {
+    return ["サーバーを選ぶ", "検知条件を選ぶ", "変更を保存"];
+  }
+  return ["サーバーを選ぶ", `${feature.label}を設定`, "変更を保存"];
+}
+
 function renderDashboard() {
   const guild = selectedGuild();
   const canConfigure = selectedGuildCanConfigure();
@@ -5701,21 +6037,18 @@ function renderDashboard() {
   const view = activeSettingsView();
   const pageTitle =
     view === "user"
-      ? escapeHtml(state.user?.username ?? "ユーザー")
+      ? state.user?.username ?? "ユーザー"
       : view === "host"
         ? "管理者用"
         : canConfigure
-          ? escapeHtml(guild?.name ?? "")
+          ? guild?.name ?? ""
           : "サーバーを選択";
   if (view === "user") {
     return `
       <div class="dashboard-grid dashboard-grid--user">
         <div class="workspace workspace--user">
           <div class="workspace-main workspace-main--user">
-            <div class="workspace__title">
-              <span>${page.eyebrow}</span>
-              <h2>${pageTitle}</h2>
-            </div>
+            ${renderWorkspaceTitle(page.eyebrow, pageTitle, page.help, oneWorkspaceSteps(page, view))}
             ${renderWorkspaceContent()}
           </div>
         </div>
@@ -5729,10 +6062,7 @@ function renderDashboard() {
         <div class="workspace-layout">
           ${renderFunctionSidebar()}
           <div class="workspace-main">
-            <div class="workspace__title">
-              <span>${page.eyebrow}</span>
-              <h2>${pageTitle}</h2>
-            </div>
+            ${renderWorkspaceTitle(page.eyebrow, pageTitle, page.help, oneWorkspaceSteps(page, view))}
             ${renderWorkspaceContent()}
           </div>
         </div>
@@ -7432,10 +7762,7 @@ function renderGuardDashboard() {
         <div class="workspace-layout workspace-layout--guard">
           ${renderGuardFunctionSidebar()}
           <div class="workspace-main">
-            <div class="workspace__title">
-              <span>${escapeHtml(feature.label)}</span>
-              <h2>${escapeHtml(pageTitle)}</h2>
-            </div>
+            ${renderWorkspaceTitle(feature.label, pageTitle, feature.help, guardWorkspaceSteps(feature))}
             ${renderGuardFeatureContent(feature)}
           </div>
         </div>
@@ -7487,7 +7814,7 @@ function renderGuardFunctionSidebar() {
   return `
     <aside class="function-sidebar" aria-label="Guard機能メニュー">
       <div class="function-sidebar__label">Guard機能</div>
-      <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="Guard機能">
+      <div class="function-sidebar__items" role="tablist" aria-label="Guard機能">
         ${visibleGuardFeatures().map(renderGuardFunctionNavItem).join("")}
       </div>
     </aside>
@@ -7513,7 +7840,7 @@ function renderGuardInvitation() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>有効にすると、新しく作成されたサーバー招待リンクを検知してすぐに無効化します。既存のリンクは変更しません。</span>
       </div>
-      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
+      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">サーバー一覧から設定対象を選択してください。</p>`}
       ${state.guard.invitationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.invitationError)}</span></p>` : ""}
       ${state.guard.invitationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.invitationMessage)}</span></p>` : ""}
       <form class="settings-grid guard-verification-form" data-guard-invitation-form>
@@ -7546,7 +7873,6 @@ function renderGuardFunctionNavItem(feature) {
           <span>${escapeHtml(feature.description)}</span>
         </span>
       </button>
-      ${renderInfoPopover(feature.help, `${feature.label}の説明`)}
     </div>
   `;
 }
@@ -7560,7 +7886,7 @@ function renderGuardGuildList() {
     <aside class="guild-list ${state.guildListCollapsed ? "guild-list--collapsed" : ""}" aria-label="Guardサーバー">
       <div class="guild-list__header">
         <div class="panel-heading">
-          ${icon("server")}<h2>サーバー</h2>
+          ${icon("server")}<h2>設定するサーバー</h2>
         </div>
         <button class="guild-list__toggle" type="button" data-action="toggle-guild-list" aria-expanded="${guildListExpanded}" aria-controls="guard-guild-list-body">
           <span>${guildListExpanded ? "閉じる" : "開く"}</span>${icon(guildListExpanded ? "chevronUp" : "chevronDown")}
@@ -7849,7 +8175,7 @@ function renderGuardVerification() {
       <form class="settings-grid guard-verification-form" data-guard-verification-form>
         <div class="field guard-selected-server">
           <span>選択中のサーバー</span>
-          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <strong>${escapeHtml(selectedGuild?.name ?? "サーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
         ${renderGuardVerificationChannelField("button_channel_id", "認証ボタン配置チャンネル", form.button_channel_id, selectedGuild)}
@@ -7896,7 +8222,7 @@ function renderGuardModeration() {
         </div>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>最初はすべて無効です。必要な検知だけを有効にし、各レベルの実際の秒数・回数を確認して保存してください。通常会話を除外したい場合は、チャンネルまたは信頼IDを追加できます。</span>
+        ${icon("shield")}<span>はじめて設定する場合は、必要な検知を有効にして「ゆるめ」から試し、処罰内容を確認して保存してください。検知条件が書かれたカード自体を押すとペースを選べます。</span>
       </div>
       ${state.guard.moderationCatalog.member_actions_enabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、メッセージ内容や投稿回数からの自動キック／BANは無効です。検知時の処理はログまたはメッセージ削除までに制限されます。</span></div>`}
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
@@ -7904,35 +8230,37 @@ function renderGuardModeration() {
       <form class="guard-moderation-form" data-guard-moderation-form>
         <div class="field guard-selected-server">
           <span>選択中のサーバー</span>
-          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <strong>${escapeHtml(selectedGuild?.name ?? "サーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
-        <article class="feature-card guard-moderation-card guard-moderation-policy-card">
-          <div class="feature-card__header">
-            <div class="panel-heading">${icon("shield")}<h2>サーバー全体の権限制御</h2></div>
-            <span class="feature-status ${form.external_apps_blocked ? "feature-status--on" : ""}">${form.external_apps_blocked ? "外部アプリ禁止中" : "外部アプリ許可"}</span>
-          </div>
-          <p class="guard-moderation-card__description">新しく作成されるチャンネルを含め、サーバー全体のDiscord権限をGuardが自動同期します。</p>
-          <div class="settings-grid guard-moderation-card__fields">
-            <label class="toggle-row guard-verification-toggle">
-              <input type="checkbox" data-guard-moderation-global-field="external_apps_blocked" ${form.external_apps_blocked ? "checked" : ""} />
-              <span>全チャンネルで外部アプリの使用を禁止する</span>
-            </label>
-            <div class="field">
-              <span>認証済みユーザーの投票権限</span>
-              <small>認証設定が有効なサーバーでは、認証済みロールを持つユーザーだけが投票を作成できるよう自動設定されます。</small>
+        <div class="guard-moderation-foundation-grid">
+          <article class="feature-card guard-moderation-card guard-moderation-policy-card">
+            <div class="feature-card__header">
+              <div class="panel-heading">${icon("shield")}<h2>サーバー全体の権限制御</h2></div>
+              <span class="feature-status ${form.external_apps_blocked ? "feature-status--on" : ""}">${form.external_apps_blocked ? "外部アプリ禁止中" : "外部アプリ許可"}</span>
             </div>
-          </div>
-        </article>
-        <article class="feature-card guard-moderation-card guard-moderation-trust-card">
-          <div class="feature-card__header">
-            <div class="panel-heading">${icon("lock")}<h2>サーバー共通の信頼リスト</h2></div>
-          </div>
-          <p class="guard-moderation-card__description">ここに追加したIDは、すべての荒らし検知から除外されます。普段使う連携BotやWebhookだけを登録してください。</p>
-          <div class="settings-grid guard-moderation-card__fields">
-            ${GUARD_MODERATION_TRUST_FIELDS.map((field) => renderGuardModerationIdListField("guild", field, form[field.id])).join("")}
-          </div>
-        </article>
+            <p class="guard-moderation-card__description">新しく作成されるチャンネルを含め、サーバー全体のDiscord権限をGuardが自動同期します。</p>
+            <div class="settings-grid guard-moderation-card__fields">
+              <label class="toggle-row guard-verification-toggle">
+                <input type="checkbox" data-guard-moderation-global-field="external_apps_blocked" ${form.external_apps_blocked ? "checked" : ""} />
+                <span><strong>外部アプリを禁止する</strong><small>すべてのチャンネルへ同じ権限を適用します。</small></span>
+              </label>
+              <div class="field">
+                <span>認証済みユーザーの投票権限</span>
+                <small>認証設定が有効な場合、認証済みロールを持つユーザーだけが投票を作成できます。</small>
+              </div>
+            </div>
+          </article>
+          <article class="feature-card guard-moderation-card guard-moderation-trust-card">
+            <div class="feature-card__header">
+              <div class="panel-heading">${icon("lock")}<h2>サーバー共通の信頼リスト</h2></div>
+            </div>
+            <p class="guard-moderation-card__description">ここに追加したIDは、すべての荒らし検知から除外されます。普段使う連携BotやWebhookだけを登録してください。</p>
+            <div class="settings-grid guard-moderation-card__fields">
+              ${GUARD_MODERATION_TRUST_FIELDS.map((field) => renderGuardModerationIdListField("guild", field, form[field.id])).join("")}
+            </div>
+          </article>
+        </div>
         <div class="guard-moderation-grid">
           ${guardModerationFeatureDefinitions().map((feature) => renderGuardModerationFeatureCard(feature, form.features[feature.id], selectedGuild)).join("")}
         </div>
@@ -7971,22 +8299,23 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
       <div class="settings-grid guard-moderation-card__fields">
         <label class="toggle-row guard-verification-toggle">
           <input type="checkbox" data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="enabled" ${normalized.enabled ? "checked" : ""} />
-          <span>この検知を有効にする</span>
+          <span><strong>この検知を有効にする</strong><small>オフの間は検知も処罰も行いません。</small></span>
         </label>
-        ${!isNgWordFeature ? `<label class="field">
-          <span>${isPaceFeature ? "検知ペース" : "検知感度"}</span>
-          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
-            ${state.guard.moderationCatalog.levels.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}${level.description ? ` — ${escapeHtml(level.description)}` : ""}</option>`).join("")}
-          </select>
-          <small>${isPaceFeature ? "下の実数値を確認して選べます。" : "誤検知が気になる場合は「ゆるめ」から始めてください。"}</small>
-        </label>` : `<div class="field"><span>検知方式</span><small>登録した語句との一致で判定するため、感度の選択はありません。</small></div>`}
         <label class="field">
           <span>処罰内容</span>
           <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="action">
             ${state.guard.moderationCatalog.actions.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
           </select>
         </label>
-        ${isPaceFeature ? renderGuardModerationRuleDetails(feature.id, normalized.level) : ""}
+        ${isPaceFeature
+          ? renderGuardModerationRuleSelector(feature.id, normalized.level)
+          : !isNgWordFeature ? `<label class="field">
+          <span>検知感度</span>
+          <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="level">
+            ${state.guard.moderationCatalog.levels.map((level) => `<option value="${escapeAttribute(level.id)}" ${level.id === normalized.level ? "selected" : ""}>${escapeHtml(level.label)}${level.description ? ` — ${escapeHtml(level.description)}` : ""}</option>`).join("")}
+          </select>
+          <small>誤検知が気になる場合は「ゆるめ」から始めてください。</small>
+        </label>` : `<div class="field"><span>検知方式</span><small>登録した語句との一致で判定するため、感度の選択はありません。</small></div>`}
         ${renderGuardModerationTargetChannelsFieldAdditive(feature.id, normalized.ignored_channel_ids, guild)}
         <details class="guard-moderation-advanced">
           <summary>この検知だけの信頼リスト</summary>
@@ -8189,7 +8518,7 @@ function renderGuardLogging() {
       <form class="guard-moderation-form guard-logging-form" data-guard-logging-form>
         <div class="field guard-selected-server">
           <span>選択中のサーバー</span>
-          <strong>${escapeHtml(selectedGuild?.name ?? "右側のサーバー一覧から選択してください")}</strong>
+          <strong>${escapeHtml(selectedGuild?.name ?? "サーバー一覧から選択してください")}</strong>
           <small>${escapeHtml(selectedGuild?.id ?? "未選択")}</small>
         </div>
         <div class="guard-moderation-grid guard-logging-grid">
@@ -8809,6 +9138,7 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
     }
     return;
   }
+  const restoreLevelFocus = field === "level" && target instanceof HTMLInputElement && target.type === "radio";
   const value = target instanceof HTMLInputElement && target.type === "checkbox"
     ? target.checked
     : target instanceof HTMLSelectElement && target.multiple
@@ -8830,6 +9160,14 @@ function updateGuardModerationField(target, options = { renderAfter: true }) {
   updateDirtyState("guardModeration");
   if (options.renderAfter) {
     render();
+    if (restoreLevelFocus) {
+      const nextInput = root.querySelector(
+        `input[type="radio"][data-guard-moderation-feature="${CSS.escape(featureId)}"][data-guard-moderation-field="level"][value="${CSS.escape(String(value))}"]`,
+      );
+      if (nextInput instanceof HTMLInputElement) {
+        nextInput.focus({ preventScroll: true });
+      }
+    }
   }
 }
 
@@ -9370,7 +9708,6 @@ function guardRegisteredIdentityLabel(linkType) {
     verified_device_alt: "Guard認証の端末確定一致",
   })[linkType] ?? "関連アカウント";
 }
-
 function renderGuardRegisteredUsers(registry) {
   const users = guardRegisteredUsers(registry);
   const total = Number(registry.stats?.approved_identity_count ?? users.length) || users.length;
@@ -9690,35 +10027,42 @@ function renderGuardModerationIdListField(scope, field, values) {
   `;
 }
 
-function renderGuardModerationRuleDetails(featureId, selectedLevel) {
+function renderGuardModerationRuleSelector(featureId, selectedLevel) {
   const prefixes = GUARD_MODERATION_RULE_PREFIXES[featureId] ?? [];
   const levels = state.guard.moderationCatalog.levels;
   const rules = state.guard.moderationCatalog.rules;
-  if (!prefixes.length || !levels.length || !isObject(rules)) {
+  if (!levels.length) {
     return "";
   }
   const rows = levels.map((level) => {
-    const values = isObject(rules[level.id]) ? rules[level.id] : {};
+    const values = isObject(rules) && isObject(rules[level.id]) ? rules[level.id] : {};
     const entries = Object.entries(values).filter(([key, value]) =>
       prefixes.some((prefix) => key.startsWith(prefix)) && Number.isFinite(Number(value)),
     );
-    if (!entries.length) {
-      return "";
-    }
+    const condition = entries.length
+      ? entries.map(([key, value]) => `${guardModerationRuleLabel(key)}: ${guardModerationRuleValue(key, value)}`).join(" / ")
+      : level.description || "このペースの検知条件を使用します。";
+    const selected = level.id === selectedLevel;
     return `
-      <div class="guard-rule-level ${level.id === selectedLevel ? "guard-rule-level--selected" : ""}">
-        <strong>${escapeHtml(level.label)}${level.id === selectedLevel ? "（選択中）" : ""}</strong>
-        <span>${entries.map(([key, value]) => `${escapeHtml(guardModerationRuleLabel(key))}: ${escapeHtml(guardModerationRuleValue(key, value))}`).join(" / ")}</span>
-      </div>
+      <label class="guard-rule-level ${selected ? "guard-rule-level--selected" : ""}">
+        <input type="radio" name="guard-moderation-level-${escapeAttribute(featureId)}" value="${escapeAttribute(level.id)}" data-guard-moderation-feature="${escapeAttribute(featureId)}" data-guard-moderation-field="level" ${selected ? "checked" : ""} />
+        <span class="guard-rule-level__copy">
+          <span class="guard-rule-level__header">
+            <strong>${escapeHtml(level.label)}</strong>
+            <em>${selected ? "選択中" : "選択する"}</em>
+          </span>
+          <span class="guard-rule-level__condition">${escapeHtml(condition)}</span>
+        </span>
+      </label>
     `;
-  }).filter(Boolean);
-  return rows.length ? `
-    <div class="field guard-moderation-rule-details">
-      <span>実際の検知条件</span>
-      <small>「時間内の回数が上限以上」になると検知します。短時間・低い上限ほど厳しい設定です。</small>
-      ${rows.join("")}
-    </div>
-  ` : "";
+  });
+  return `
+    <fieldset class="field guard-moderation-rule-selector">
+      <legend>検知ペースと実際の条件</legend>
+      <p>条件カードを押して選択します。短時間・低い上限ほど厳しい設定です。</p>
+      <div class="guard-rule-options">${rows.join("")}</div>
+    </fieldset>
+  `;
 }
 
 function guardModerationRuleLabel(key) {
@@ -10025,7 +10369,7 @@ function renderFunctionSidebar() {
   return `
     <aside class="function-sidebar" aria-label="機能メニュー">
       <div class="function-sidebar__label">サーバー設定</div>
-      <div class="function-sidebar__items" role="tablist" aria-orientation="vertical" aria-label="設定ページ">
+      <div class="function-sidebar__items" role="tablist" aria-label="設定ページ">
         ${visibleSettingsPages().map(renderFunctionNavItem).join("")}
       </div>
     </aside>
@@ -10043,21 +10387,7 @@ function renderFunctionNavItem(page) {
           <span>${escapeHtml(page.description)}</span>
         </span>
       </button>
-      ${renderInfoPopover(page.help, `${page.label}の説明`)}
     </div>
-  `;
-}
-
-function renderInfoPopover(text, label) {
-  const tooltip = String(text ?? "").trim();
-  if (!tooltip) {
-    return "";
-  }
-  return `
-    <span class="info-help" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(tooltip)}">
-      ${icon("info")}
-      <span class="info-popover" role="tooltip">${escapeHtml(tooltip)}</span>
-    </span>
   `;
 }
 
@@ -10070,7 +10400,7 @@ function renderGuildList() {
     <aside class="guild-list ${state.guildListCollapsed ? "guild-list--collapsed" : ""}" aria-label="Discordサーバー">
       <div class="guild-list__header">
         <div class="panel-heading">
-          ${icon("server")}<h2>サーバー</h2>
+          ${icon("server")}<h2>設定するサーバー</h2>
         </div>
         <button class="guild-list__toggle" type="button" data-action="toggle-guild-list" aria-expanded="${guildListExpanded}" aria-controls="guild-list-body">
           <span>${guildListExpanded ? "閉じる" : "開く"}</span>${icon(guildListExpanded ? "chevronUp" : "chevronDown")}
@@ -10459,16 +10789,22 @@ function renderActivityMetricCard(title, value, metric, points, lineClass) {
 
 function renderActivitySparkline(points, metric, lineClass) {
   const linePoints = activitySparklinePoints(points, metric);
+  const [pointX, pointY] = linePoints.split(",");
   return `
     <svg class="activity-sparkline" viewBox="0 0 320 110" role="img" aria-label="アクティビティ推移">
       <path class="activity-grid-line" d="M14 18 H306 M14 55 H306 M14 92 H306"></path>
       <polyline class="activity-line ${lineClass}" points="${escapeAttribute(linePoints)}"></polyline>
+      ${points.length === 1 ? `<circle class="activity-line ${lineClass}" cx="${pointX}" cy="${pointY}" r="4"></circle>` : ""}
     </svg>
   `;
 }
 
 function renderPlaylistPanel(playlist) {
   const tracks = playlist.tracks ?? [];
+  const uploadProgress = state.playlistImportProgress;
+  const uploadDescription = uploadProgress
+    ? `${uploadProgress.current}/${uploadProgress.total}件を取り込み中: ${uploadProgress.filename}`
+    : "音声ファイルをまとめてドラッグアンドドロップ";
   return `
     <section class="feature-card playlist-panel" aria-label="プレイリスト">
       <div class="feature-card__header playlist-panel__header">
@@ -10485,20 +10821,20 @@ function renderPlaylistPanel(playlist) {
       ${renderPlaylistSpotlight(tracks)}
       <form class="playlist-url-form" data-playlist-url-form>
         <label class="field playlist-url-form__field">
-          <span>曲名または音楽サービスURL</span>
-          <input type="text" value="${escapeAttribute(state.playlistUrl)}" placeholder="曲名 / Spotify・Apple Music・Amazon Music・SoundCloud URL" data-playlist-field="url" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""} />
+          <span>曲名または音楽サービスの公開プレイリストURL</span>
+          <input type="text" value="${escapeAttribute(state.playlistUrl)}" placeholder="曲名 / Spotify・Apple Music・Amazon Music・SoundCloudの公開プレイリストURL" data-playlist-field="url" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""} />
         </label>
         <button class="icon-button icon-button--primary" type="submit" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""}>
-          ${icon(isHttpUrl(state.playlistUrl) ? "link" : "search")}<span>${state.playlistSaving ? "登録中" : state.playlistSearchLoading ? "検索中" : "検索 / 登録"}</span>
+          ${icon(isHttpUrl(state.playlistUrl) ? "link" : "search")}<span>${state.playlistSaving ? "取り込み中" : state.playlistSearchLoading ? "検索中" : isHttpUrl(state.playlistUrl) ? "取り込む" : "検索"}</span>
         </button>
       </form>
       ${renderPlaylistSearchResults()}
       <div class="playlist-drop-zone ${state.playlistDragActive ? "playlist-drop-zone--active" : ""}" data-playlist-drop-zone>
-        <input type="file" accept="audio/mpeg,.mp3" data-playlist-file-input hidden />
+        <input type="file" accept="${PLAYLIST_AUDIO_FILE_ACCEPT}" multiple data-playlist-file-input hidden />
         <div>
           ${icon("upload")}
-          <strong>mp3をドラッグアンドドロップ</strong>
-          <span>ファイル選択からも登録できます。</span>
+          <strong>${escapeHtml(uploadDescription)}</strong>
+          <span>MP3・WAV・OGG・M4A・FLAC・AAC・Opusを複数まとめて登録できます。</span>
         </div>
         <button class="icon-button icon-button--ghost" type="button" data-action="playlist-choose-file" ${state.playlistSaving ? "disabled" : ""}>
           ${icon("folder")}<span>ファイル選択</span>
@@ -10508,7 +10844,7 @@ function renderPlaylistPanel(playlist) {
         ${
           tracks.length
             ? tracks.map(renderPlaylistTrack).join("")
-            : `<div class="empty-state">登録曲はまだありません。曲名検索、音楽サービスURL、mp3アップロードで追加できます。</div>`
+            : `<div class="empty-state">登録曲はまだありません。曲名検索、音楽サービスのプレイリストURL、音声ファイルの一括アップロードで追加できます。</div>`
         }
       </div>
     </section>
@@ -10565,12 +10901,12 @@ function renderPlaylistSpotlight(tracks) {
       <div class="playlist-spotlight__copy">
         <span>Discat One Playlist</span>
         <strong>曲名検索もサービスURLも、すぐ再生できる曲リストに</strong>
-        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "曲名検索、SpotifyなどのURL、mp3を追加すると、ここに自分の曲が並びます。")}</p>
+        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "曲名検索、音楽サービスのプレイリストURL、音声ファイルを追加すると、ここに自分の曲が並びます。")}</p>
         <div class="playlist-spotlight__chips" aria-label="対応している登録方法">
           <span>${icon("search")}曲名検索</span>
           <span>${icon("link")}Spotify / Apple</span>
           <span>${icon("link")}Amazon / SoundCloud</span>
-          <span>${icon("upload")}mp3対応</span>
+          <span>${icon("upload")}複数形式・一括取込</span>
         </div>
       </div>
       <div class="playlist-spotlight__stat">
@@ -10581,8 +10917,15 @@ function renderPlaylistSpotlight(tracks) {
   `;
 }
 
+function playlistUploadSourceLabel(track) {
+  const filename = String(track?.original_filename ?? "").trim();
+  const dotIndex = filename.lastIndexOf(".");
+  const extension = dotIndex >= 0 ? filename.slice(dotIndex + 1).toUpperCase() : "";
+  return extension ? `${extension}アップロード` : "音声ファイルアップロード";
+}
+
 function renderPlaylistTrack(track, options = {}) {
-  const sourceLabel = track.source_type === "upload" ? "mp3アップロード" : "URL";
+  const sourceLabel = track.source_type === "upload" ? playlistUploadSourceLabel(track) : "URL";
   const readonly = Boolean(options.readonly);
   const ownerUserId = normalizeNullableString(options.ownerUserId);
   const escapedTrackId = escapeAttribute(track.id);
@@ -11145,6 +11488,7 @@ function renderFeatureSettingsForm() {
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
     "temporary-vc": () => renderTemporaryVoiceSettings(voiceChannels, categories),
     "ticket": () => renderTicketSettings(categories, textChannels, roles),
+    "role-panel": () => renderRolePanelSettings(textChannels, roles),
     "server-rank": () => renderServerRankSettings(textChannels),
     "bump-rank": () => renderBumpRankSettings(textChannels, roles),
   }[page.id]?.() ?? renderGlobalChatSettings(textChannels);
@@ -11522,6 +11866,97 @@ function renderTicketSettings(categories, textChannels, roles) {
         </button>
       </div>
     </section>
+  `;
+}
+
+function renderRolePanelSettings(textChannels, roles) {
+  const settings = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  const channel = textChannels.find((item) => item.id === settings.channel_id);
+  const configuredOptions = settings.options.filter((option) => option.emoji && option.role_id);
+  const enabled = Boolean(settings.channel_id && configuredOptions.length > 0);
+  const optionsLoading = selectedGuildCanConfigure() && !state.ttsOptions;
+  const panelMessageUrl =
+    state.selectedGuildId && settings.channel_id && settings.message_id
+      ? `https://discord.com/channels/${encodeURIComponent(state.selectedGuildId)}/${encodeURIComponent(settings.channel_id)}/${encodeURIComponent(settings.message_id)}`
+      : "";
+  const publishDisabled = state.rolePanelPublishing || optionsLoading || !enabled || !selectedGuildCanConfigure();
+  return `
+    <section class="feature-card ticket-settings-card" aria-label="ロールパネル設定">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("shield")}<h2>ロールパネル</h2>
+        </div>
+        <span class="feature-status ${enabled ? "feature-status--on" : ""}">
+          ${enabled ? "設定済み" : "未設定"}
+        </span>
+      </div>
+      <div class="settings-grid">
+        <label class="field">
+          <span>パネル送信先チャンネル</span>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-role-panel-field="channel_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>パネルタイトル（テーマ）</span>
+          <input type="text" maxlength="100" value="${escapeAttribute(settings.theme)}" data-role-panel-field="theme" />
+        </label>
+        <div class="field feature-summary feature-summary--wide">
+          <span>現在の設定</span>
+          <strong>${channel ? `#${escapeHtml(channel.name)}` : "送信先未設定"} / ${configuredOptions.length}件のロール</strong>
+        </div>
+      </div>
+      <div class="sticky-rules role-panel-options">
+        <div class="sticky-rules__header">
+          <span>リアクション絵文字とロール</span>
+          <button class="icon-button icon-button--ghost" type="button" data-action="add-role-panel-option" ${optionsLoading || settings.options.length >= ROLE_PANEL_MAX_OPTIONS ? "disabled" : ""}>
+            ${icon("plus")}<span>追加</span>
+          </button>
+        </div>
+        <div class="sticky-rules__list">
+          ${
+            settings.options.length > 0
+              ? settings.options.map((option, index) => renderRolePanelOption(option, index, roles, optionsLoading)).join("")
+              : `<div class="empty-state">絵文字とロールの組み合わせを追加してください。</div>`
+          }
+        </div>
+      </div>
+      <div class="settings-panel__footer">
+        ${icon("info")}<span>ユーザーのリアクションはすぐに削除され、各絵文字はBotのリアクション1件だけが残ります。同じ絵文字をもう一度押すとロールを剥がし、結果メッセージはこのチャンネルに10秒間だけ表示されます。</span>
+      </div>
+      <div class="feature-card__actions">
+        ${
+          panelMessageUrl
+            ? `<a class="icon-button icon-button--ghost" href="${escapeAttribute(panelMessageUrl)}" target="_blank" rel="noopener">${icon("external")}<span>現在のパネルを開く</span></a>`
+            : ""
+        }
+        <button class="icon-button icon-button--primary" type="button" data-action="publish-role-panel" ${publishDisabled ? "disabled" : ""}>
+          ${icon(state.rolePanelPublishing ? "refresh" : "shield")}<span>${state.rolePanelPublishing ? "送信中" : "パネルを送信"}</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderRolePanelOption(option, index, roles, optionsLoading) {
+  return `
+    <div class="dictionary-row">
+      <label class="field dictionary-row__field">
+        <span>リアクション絵文字</span>
+        <input type="text" maxlength="100" value="${escapeAttribute(option.emoji)}" placeholder="例: 🎮 または &lt;:name:id&gt;" data-role-panel-option-index="${index}" data-role-panel-option-field="emoji" ${optionsLoading ? "disabled" : ""} />
+      </label>
+      <label class="field dictionary-row__field">
+        <span>付与するロール</span>
+        <select data-role-panel-option-index="${index}" data-role-panel-option-field="role_id" ${optionsLoading ? "disabled" : ""}>
+          <option value="">未設定</option>
+          ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === option.role_id ? "selected" : ""} ${role.managed ? "disabled" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
+        </select>
+      </label>
+      <button class="icon-button icon-button--ghost dictionary-row__remove" type="button" data-action="remove-role-panel-option" data-index="${index}" title="削除" ${optionsLoading ? "disabled" : ""}>
+        ${icon("trash")}
+      </button>
+    </div>
   `;
 }
 
@@ -12668,6 +13103,8 @@ function collectStatusToasts() {
     toasts.push({ tone: "info", title: "💾 設定を保存中", message: "Botへ安全に送信しています。このままお待ちください。" });
   } else if (state.ticketPanelPublishing) {
     toasts.push({ tone: "info", title: "📨 パネルを送信中", message: "Discordへの送信結果を確認しています。" });
+  } else if (state.rolePanelPublishing) {
+    toasts.push({ tone: "info", title: "📨 ロールパネルを送信中", message: "Discordへの送信結果を確認しています。" });
   }
   if (state.message) {
     toasts.push({ tone: "error", message: state.message });
@@ -13081,8 +13518,8 @@ function handleDrop(event) {
   }
   event.preventDefault();
   state.playlistDragActive = false;
-  const file = event.dataTransfer?.files?.[0] ?? null;
-  void uploadPlaylistFile(file);
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  void uploadPlaylistFiles(files);
 }
 
 function handlePointerDown(event) {
@@ -13279,6 +13716,8 @@ function handleClick(event) {
       void saveFeatureSettings();
     } else if (action === "publish-ticket-panel") {
       void publishTicketPanel();
+    } else if (action === "publish-role-panel") {
+      void publishRolePanel();
     } else if (action === "save-pending-settings") {
       void savePendingSettings();
     } else if (action === "discard-pending-settings") {
@@ -13314,6 +13753,25 @@ function handleClick(event) {
     } else if (action === "remove-sticky-message") {
       const index = Number(actionEl.dataset.index);
       state.featureSettings.sticky_messages = state.featureSettings.sticky_messages.filter((_, ruleIndex) => ruleIndex !== index);
+      updateDirtyState("features");
+      render();
+    } else if (action === "add-role-panel-option") {
+      const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+      if (current.options.length < ROLE_PANEL_MAX_OPTIONS) {
+        state.featureSettings.role_panel = {
+          ...current,
+          options: [...current.options, { emoji: "", role_id: "" }],
+        };
+        updateDirtyState("features");
+        render();
+      }
+    } else if (action === "remove-role-panel-option") {
+      const index = Number(actionEl.dataset.index);
+      const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+      state.featureSettings.role_panel = {
+        ...current,
+        options: current.options.filter((_, optionIndex) => optionIndex !== index),
+      };
       updateDirtyState("features");
       render();
     } else if (action === "clear-vc-notification") {
@@ -13457,6 +13915,10 @@ function handleChange(event) {
     updateTemporaryVoiceField(target);
   } else if (target.dataset.ticketField) {
     updateTicketField(target);
+  } else if (target.dataset.rolePanelField) {
+    updateRolePanelField(target);
+  } else if (target.dataset.rolePanelOptionField) {
+    updateRolePanelOptionField(target);
   } else if (target.dataset.vcNotificationField) {
     updateVcNotificationField(target);
   } else if (target.dataset.bumpRankField) {
@@ -13464,9 +13926,9 @@ function handleChange(event) {
   } else if (target.dataset.bumpRankSource) {
     updateBumpRankSource(target);
   } else if ("playlistFileInput" in target.dataset) {
-    const file = target.files?.[0] ?? null;
+    const files = Array.from(target.files ?? []);
     target.value = "";
-    void uploadPlaylistFile(file);
+    void uploadPlaylistFiles(files);
   } else if ("playlistSeek" in target.dataset) {
     handlePlaylistSeekInput(target);
   }
@@ -13529,6 +13991,16 @@ function handleInput(event) {
 
   if (target.dataset.ticketField) {
     updateTicketField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.rolePanelField) {
+    updateRolePanelField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.rolePanelOptionField) {
+    updateRolePanelOptionField(target, { renderAfter: false });
     return;
   }
 
@@ -13839,6 +14311,51 @@ function updateTicketField(target, options = { renderAfter: true }) {
   state.featureSettings.ticket = {
     ...current,
     ...patch,
+  };
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateRolePanelField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const field = target.dataset.rolePanelField;
+  if (!field) {
+    return;
+  }
+  const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  const value = field === "theme"
+    ? String(target.value ?? "").slice(0, 100)
+    : target.value;
+  state.featureSettings.role_panel = {
+    ...current,
+    [field]: value,
+  };
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateRolePanelOptionField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const index = Number(target.dataset.rolePanelOptionIndex);
+  const field = target.dataset.rolePanelOptionField;
+  const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  if (!Number.isInteger(index) || !field || !current.options[index]) {
+    return;
+  }
+  const value = field === "emoji" ? String(target.value ?? "").slice(0, 100) : target.value;
+  state.featureSettings.role_panel = {
+    ...current,
+    options: current.options.map((option, optionIndex) =>
+      optionIndex === index ? { ...option, [field]: value } : option,
+    ),
   };
   updateDirtyState("features");
   if (options.renderAfter) {
