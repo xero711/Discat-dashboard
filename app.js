@@ -31,6 +31,10 @@ const TRANSIENT_LOADING_DELAY_MS = 280;
 const CONNECTION_LOADING_EXIT_MS = 180;
 const TURNSTILE_CONFIG_CACHE_MS = 5 * 60 * 1000;
 const PLAYLIST_PREVIEW_DURATION_SECONDS = 15;
+const PLAYLIST_MAX_TRACKS = 100;
+const PLAYLIST_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const PLAYLIST_AUDIO_FILE_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"]);
+const PLAYLIST_AUDIO_FILE_ACCEPT = ".mp3,.wav,.ogg,.m4a,.flac,.aac,.opus";
 const TURNSTILE_SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 const TURNSTILE_PROOF_STORAGE_KEY = "discat_one_turnstile_proof";
 const TURNSTILE_PROOF_SCOPE_STORAGE_KEY = "discat_one_turnstile_proof_scope";
@@ -59,6 +63,13 @@ const AUDIT_ACTION_LABELS = {
   "guard.verification.update": "認証設定の保存",
   "guard.invitation.update": "招待リンク設定の保存",
   "guard.moderation.update": "荒らし対策設定の保存",
+  "guard.abuse_registry.submit": "荒らし登録申請",
+  "guard.abuse_registry.direct_register": "荒らしユーザー直接登録",
+  "guard.abuse_registry.approve": "荒らし登録承認",
+  "guard.abuse_registry.reject": "荒らし登録却下",
+  "guard.abuse_registry.revoke": "荒らし登録取消",
+  "guard.abuse_registry.add_alt": "別アカウント追加",
+  "guard.abuse_registry.remove_alt": "別アカウント削除",
   "guard.logging.update": "ログ機能設定の保存",
   "guard.risk.update": "危険度判断設定の保存",
 };
@@ -170,14 +181,14 @@ const HOST_DATABASE_CATEGORIES = [
 ];
 const SERVER_DEFAULT_PAGE = "welcome-message";
 const ACTIVITY_PERIODS = [
-  { id: "daily", label: "日別", summary: "直近7日" },
-  { id: "weekly", label: "週別", summary: "直近8週" },
-  { id: "monthly", label: "月別", summary: "直近6か月" },
+  { id: "daily", label: "日", summary: "今日" },
+  { id: "weekly", label: "週", summary: "直近7日間" },
+  { id: "monthly", label: "月", summary: "直近1か月" },
 ];
 const ACTIVITY_POINT_LIMITS = {
-  daily: 7,
-  weekly: 8,
-  monthly: 6,
+  daily: 1,
+  weekly: 7,
+  monthly: 32,
 };
 const RANKING_PERIODS = [
   { id: "daily", label: "日", summary: "今日" },
@@ -229,6 +240,8 @@ const WELCOME_MESSAGE_TOKENS = WELCOME_MESSAGE_TOKEN_GROUPS.flatMap((group) => g
 const TICKET_PANEL_DEFAULT_TITLE = "お問い合わせ・サポート";
 const TICKET_PANEL_DEFAULT_DESCRIPTION = "困ったことがある場合は、下のボタンからチケットを作成してください。\nスタッフが順番に対応します。";
 const TICKET_CALL_COOLDOWN_MINUTES_DEFAULT = 30;
+const ROLE_PANEL_DEFAULT_THEME = "ロールを選択";
+const ROLE_PANEL_MAX_OPTIONS = 20;
 
 const SETTINGS_PAGES = [
   {
@@ -283,6 +296,15 @@ const SETTINGS_PAGES = [
     description: "問い合わせチャンネルとスタッフ対応",
     help: "カテゴリ、スタッフロール、ログチャンネル、パネル送信先を設定し、ダッシュボードからチケットパネルを送信できます。",
     icon: "ticket",
+    view: "features",
+  },
+  {
+    id: "role-panel",
+    label: "ロールパネル",
+    eyebrow: "ロール",
+    description: "リアクションでロールを切り替え",
+    help: "絵文字とロールを組み合わせ、パネルのリアクションで付与・解除できるようにします。操作結果はチャンネルに10秒間だけ表示されます。",
+    icon: "shield",
     view: "features",
   },
   {
@@ -382,7 +404,7 @@ const GUARD_FEATURES = [
   {
     id: "abuse-registry",
     label: "荒らし登録",
-    description: "悪質な利用者を証拠付きで報告し、Guard全体で共有する審査状況を確認します。",
+    description: "悪質な利用者を報告し、Guard全体で共有する審査状況を確認します。",
     help: "サーバー管理者は報告と異議申し立てができます。Guardオーナーの承認前に全体拒否へ反映されることはありません。",
     icon: "alert",
   },
@@ -818,6 +840,7 @@ const state = {
   playlistSearchResults: [],
   playlistSearchQuery: "",
   playlistDragActive: false,
+  playlistImportProgress: null,
   userActivity: null,
   userActivityLoading: false,
   userActivityError: null,
@@ -849,6 +872,7 @@ const state = {
   loading: false,
   saving: false,
   ticketPanelPublishing: false,
+  rolePanelPublishing: false,
   message: null,
   operationNotice: null,
   guildDataError: null,
@@ -898,9 +922,12 @@ const state = {
       levels: GUARD_MODERATION_LEVELS,
       actions: GUARD_MODERATION_ACTIONS,
       rules: {},
+      member_actions_enabled: false,
     },
     loggingSettings: [],
     riskSettings: [],
+    riskActions: GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id)),
+    riskMemberActionsEnabled: false,
     verificationOptions: null,
     verificationOptionsError: null,
     verificationRecords: [],
@@ -998,6 +1025,7 @@ const state = {
     guardPublicStatus: 0,
     guildOptions: 0,
     ticketPanel: 0,
+    rolePanel: 0,
   },
 };
 
@@ -1458,7 +1486,7 @@ async function loadGuardDashboardData() {
     if (guildId) {
       void ensureDashboardAccessLogged("guard", guildId);
     }
-    if (activeGuardFeature().id === "abuse-registry") {
+    if (["abuse-registry", "admin"].includes(activeGuardFeature().id)) {
       await loadGuardAbuseRegistry();
     } else if (activeGuardFeature().id === "audit-log" && guildId) {
       await loadAuditLogs("guard", guildId);
@@ -1478,7 +1506,7 @@ async function loadGuardDashboardData() {
   if (guildId) {
     void ensureDashboardAccessLogged("guard", guildId);
   }
-  if (activeGuardFeature().id === "abuse-registry") {
+  if (["abuse-registry", "admin"].includes(activeGuardFeature().id)) {
     await loadGuardAbuseRegistry();
   } else if (activeGuardFeature().id === "audit-log" && guildId) {
     await loadAuditLogs("guard", guildId);
@@ -1935,16 +1963,16 @@ const api = {
       {},
       { timeoutMs: 90000 },
     ),
-  addPlaylistUrl: (url) =>
+  importPlaylistUrl: (url) =>
     request(
-      "/playlist/tracks/url",
+      "/playlist/tracks/import",
       {
         method: "POST",
         body: JSON.stringify({ url }),
       },
-      { timeoutMs: 90000 },
+      { timeoutMs: 300000 },
     ),
-  uploadPlaylistMp3: (filename, contentBase64) =>
+  uploadPlaylistAudio: (filename, contentBase64) =>
     request(
       "/playlist/tracks/upload",
       {
@@ -1986,6 +2014,11 @@ const api = {
     }),
   publishTicketPanel: (guildId, channelId) =>
     request(`/guilds/${encodeURIComponent(guildId)}/ticket-panel`, {
+      method: "POST",
+      body: JSON.stringify({ channel_id: normalizeNullableString(channelId) }),
+    }),
+  publishRolePanel: (guildId, channelId) =>
+    request(`/guilds/${encodeURIComponent(guildId)}/role-panel`, {
       method: "POST",
       body: JSON.stringify({ channel_id: normalizeNullableString(channelId) }),
     }),
@@ -2663,9 +2696,15 @@ async function addPlaylistUrl(url = state.playlistUrl.trim(), options = {}) {
   state.playlistMessage = null;
   render();
   try {
-    const playlist = await api.addPlaylistUrl(cleanedUrl);
+    const result = await api.importPlaylistUrl(cleanedUrl);
+    const playlist = result?.playlist ?? result;
     state.playlist = normalizePlaylist(playlist);
-    state.playlistMessage = "プレイリストに追加しました。";
+    const importedCount = Number(result?.imported_count ?? 1);
+    const provider = String(result?.provider ?? "プレイリスト");
+    state.playlistMessage =
+      importedCount > 1
+        ? `${provider}から${importedCount}曲をプレイリストに取り込みました。`
+        : "プレイリストに追加しました。";
     if (options.clearInput) {
       state.playlistUrl = "";
     }
@@ -2685,31 +2724,90 @@ async function addPlaylistSearchResult(url) {
   await addPlaylistUrl(url, { clearInput: true, clearSearch: true });
 }
 
-async function uploadPlaylistFile(file) {
-  if (!file) {
+async function uploadPlaylistFiles(files) {
+  if (state.playlistSaving) {
     return;
   }
-  if (!file.name.toLowerCase().endsWith(".mp3")) {
-    state.playlistError = "mp3ファイルを選択してください。";
+  const selectedFiles = Array.from(files ?? []).filter((file) => file && typeof file.name === "string");
+  if (!selectedFiles.length) {
+    return;
+  }
+
+  const unsupportedFiles = selectedFiles.filter((file) => !playlistAudioFileExtension(file));
+  if (unsupportedFiles.length) {
+    state.playlistError = `対応していない形式のファイルがあります: ${unsupportedFiles.map((file) => file.name).join("、")}`;
     state.playlistMessage = null;
     render();
     return;
   }
+
+  const oversizedFiles = selectedFiles.filter((file) => Number(file.size ?? 0) > PLAYLIST_MAX_UPLOAD_BYTES);
+  if (oversizedFiles.length) {
+    state.playlistError = `1ファイル25MBまでです: ${oversizedFiles.map((file) => file.name).join("、")}`;
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+
+  const currentTrackCount = state.playlist?.tracks?.length ?? 0;
+  const availableSlots = Math.max(0, PLAYLIST_MAX_TRACKS - currentTrackCount);
+  if (!availableSlots) {
+    state.playlistError = `プレイリストは${PLAYLIST_MAX_TRACKS}曲までです。追加するには曲を削除してください。`;
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+  if (selectedFiles.length > availableSlots) {
+    state.playlistError = `追加できるのは残り${availableSlots}曲です。選択するファイル数を減らしてください。`;
+    state.playlistMessage = null;
+    render();
+    return;
+  }
+
   state.playlistSaving = true;
   state.playlistError = null;
   state.playlistMessage = null;
-  render();
+  let uploadedCount = 0;
+  const failures = [];
   try {
-    const contentBase64 = await readFileAsBase64(file);
-    const playlist = await api.uploadPlaylistMp3(file.name, contentBase64);
-    state.playlist = normalizePlaylist(playlist);
-  } catch (error) {
-    state.playlistError = error instanceof Error ? error.message : "mp3の登録に失敗しました。";
+    for (const [index, file] of selectedFiles.entries()) {
+      state.playlistImportProgress = {
+        current: index + 1,
+        total: selectedFiles.length,
+        filename: file.name,
+      };
+      render();
+      try {
+        const contentBase64 = await readFileAsBase64(file);
+        const playlist = await api.uploadPlaylistAudio(file.name, contentBase64);
+        state.playlist = normalizePlaylist(playlist);
+        uploadedCount += 1;
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : `${file.name}を登録できませんでした。`);
+      }
+    }
+
+    if (uploadedCount) {
+      state.playlistMessage =
+        failures.length
+          ? `${uploadedCount}件の音声ファイルを取り込みました。${failures.length}件は追加できませんでした。`
+          : `${uploadedCount}件の音声ファイルをプレイリストに取り込みました。`;
+    } else {
+      state.playlistError = failures[0] ?? "音声ファイルの登録に失敗しました。";
+    }
   } finally {
     state.playlistSaving = false;
     state.playlistDragActive = false;
+    state.playlistImportProgress = null;
     render();
   }
+}
+
+function playlistAudioFileExtension(file) {
+  const filename = String(file?.name ?? "").trim().toLowerCase();
+  const dotIndex = filename.lastIndexOf(".");
+  const extension = dotIndex >= 0 ? filename.slice(dotIndex) : "";
+  return PLAYLIST_AUDIO_FILE_EXTENSIONS.has(extension) ? extension : "";
 }
 
 async function deletePlaylistTrack(trackId) {
@@ -3374,6 +3472,7 @@ function normalizeFeatureSettings(featureSettings) {
     bump_rank: normalizeBumpRankSettings(featureSettings?.bump_rank),
     temporary_voice: normalizeTemporaryVoiceSettings(featureSettings?.temporary_voice),
     ticket: normalizeTicketSettings(featureSettings?.ticket),
+    role_panel: normalizeRolePanelSettings(featureSettings?.role_panel),
   };
 }
 
@@ -3587,6 +3686,24 @@ function normalizeTicketSettings(settings) {
   };
 }
 
+function normalizeRolePanelOption(option) {
+  return {
+    emoji: String(option?.emoji ?? "").trim(),
+    role_id: normalizeNullableString(option?.role_id) ?? "",
+  };
+}
+
+function normalizeRolePanelSettings(settings) {
+  return {
+    channel_id: normalizeNullableString(settings?.channel_id) ?? "",
+    message_id: normalizeNullableString(settings?.message_id) ?? "",
+    theme: String(settings?.theme ?? ROLE_PANEL_DEFAULT_THEME).trim() || ROLE_PANEL_DEFAULT_THEME,
+    options: Array.isArray(settings?.options)
+      ? settings.options.slice(0, ROLE_PANEL_MAX_OPTIONS).map(normalizeRolePanelOption)
+      : [],
+  };
+}
+
 function normalizeBumpRankResetInterval(value) {
   const interval = String(value ?? "none");
   return BUMP_RANK_RESET_INTERVALS.some((item) => item.id === interval) ? interval : "none";
@@ -3662,6 +3779,7 @@ function comparableFeatureSettings(featureSettings) {
   const bumpRank = comparableBumpRankSettings(featureSettings.bump_rank);
   const temporaryVoice = comparableTemporaryVoiceSettings(featureSettings.temporary_voice);
   const ticket = comparableTicketSettings(featureSettings.ticket);
+  const rolePanel = comparableRolePanelSettings(featureSettings.role_panel);
   return {
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
     global_chat_channel_id: normalizeNullableString(featureSettings.global_chat_channel_id),
@@ -3673,6 +3791,7 @@ function comparableFeatureSettings(featureSettings) {
     bump_rank: bumpRank,
     temporary_voice: temporaryVoice,
     ticket,
+    role_panel: rolePanel,
   };
 }
 
@@ -3757,6 +3876,28 @@ function comparableTicketSettings(settings) {
     creator_can_close: normalized.creator_can_close,
     staff_call_cooldown_seconds: normalized.staff_call_cooldown_seconds,
     next_number: normalized.next_number,
+  };
+}
+
+function comparableRolePanelSettings(settings) {
+  const normalized = normalizeRolePanelSettings(settings);
+  const options = normalized.options
+    .filter((option) => option.emoji && option.role_id)
+    .map((option) => ({ emoji: option.emoji, role_id: option.role_id }));
+  const hasAnyValue = Boolean(
+    normalized.channel_id
+      || normalized.message_id
+      || options.length
+      || normalized.theme !== ROLE_PANEL_DEFAULT_THEME,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    channel_id: normalizeNullableString(normalized.channel_id),
+    message_id: normalizeNullableString(normalized.message_id),
+    theme: normalized.theme,
+    options,
   };
 }
 
@@ -4035,6 +4176,10 @@ async function saveFeatureSettings() {
   if (!state.selectedGuildId || !state.featureSettings) {
     return false;
   }
+  if (activeSettingsPage().id === "role-panel" && !validateRolePanelDraft(state.featureSettings.role_panel)) {
+    render();
+    return false;
+  }
   const requestId = state.requestIds.save + 1;
   state.requestIds.save = requestId;
   state.saving = true;
@@ -4126,6 +4271,69 @@ async function publishTicketPanel() {
   }
 }
 
+async function publishRolePanel() {
+  if (!state.selectedGuildId || !state.featureSettings) {
+    return false;
+  }
+  if (!validateRolePanelDraft(state.featureSettings.role_panel)) {
+    render();
+    return false;
+  }
+
+  if (isViewDirty("features")) {
+    const saved = await saveFeatureSettings();
+    if (!saved) {
+      return false;
+    }
+  }
+
+  const rolePanel = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  const optionCount = rolePanel.options.filter((option) => option.emoji && option.role_id).length;
+  if (!rolePanel.channel_id || optionCount === 0) {
+    state.message = "送信先チャンネルと少なくとも1組の絵文字・ロールを設定してください。";
+    render();
+    return false;
+  }
+
+  const requestId = state.requestIds.rolePanel + 1;
+  state.requestIds.rolePanel = requestId;
+  state.rolePanelPublishing = true;
+  state.message = null;
+  state.operationNotice = null;
+  render();
+
+  try {
+    const result = await api.publishRolePanel(state.selectedGuildId, rolePanel.channel_id);
+    if (requestId !== state.requestIds.rolePanel) {
+      return false;
+    }
+    const refreshed = await api.featureSettings(state.selectedGuildId);
+    if (requestId !== state.requestIds.rolePanel) {
+      return false;
+    }
+    rememberSavedFeatureSettings(refreshed);
+    invalidateAuditLogs("one", state.selectedGuildId);
+    state.operationNotice = {
+      tone: "success",
+      title: "✅ ロールパネルを送信しました",
+      message: result?.panel_url
+        ? `ロールパネルを送信しました: ${result.panel_url}`
+        : "ロールパネルを送信しました。",
+    };
+    return true;
+  } catch (error) {
+    if (requestId === state.requestIds.rolePanel) {
+      state.message = error instanceof Error ? error.message : "ロールパネルの送信に失敗しました。";
+    }
+    return false;
+  } finally {
+    if (requestId === state.requestIds.rolePanel) {
+      state.rolePanelPublishing = false;
+      render();
+    }
+  }
+}
+
 function buildFeatureSettingsPatch() {
   const pageId = activeSettingsPage().id;
   if (pageId === "welcome-message") {
@@ -4161,6 +4369,11 @@ function buildFeatureSettingsPatch() {
   if (pageId === "ticket") {
     return {
       ticket: buildTicketPatch(state.featureSettings.ticket),
+    };
+  }
+  if (pageId === "role-panel") {
+    return {
+      role_panel: buildRolePanelPatch(state.featureSettings.role_panel),
     };
   }
   if (["bump-rank", "server-rank"].includes(pageId)) {
@@ -4254,6 +4467,59 @@ function buildTicketPatch(settings) {
     staff_call_cooldown_seconds: normalized.staff_call_cooldown_seconds,
     next_number: normalized.next_number,
   };
+}
+
+function buildRolePanelPatch(settings) {
+  const normalized = normalizeRolePanelSettings(settings);
+  const options = normalized.options
+    .filter((option) => option.emoji && option.role_id)
+    .map((option) => ({ emoji: option.emoji, role_id: option.role_id }));
+  const hasAnyValue = Boolean(
+    normalized.channel_id
+      || normalized.message_id
+      || options.length
+      || normalized.theme !== ROLE_PANEL_DEFAULT_THEME,
+  );
+  if (!hasAnyValue) {
+    return null;
+  }
+  return {
+    channel_id: normalized.channel_id || null,
+    message_id: normalized.message_id || null,
+    theme: normalized.theme,
+    options,
+  };
+}
+
+function validateRolePanelDraft(settings) {
+  const normalized = normalizeRolePanelSettings(settings);
+  const incomplete = normalized.options.some((option) => Boolean(option.emoji) !== Boolean(option.role_id));
+  if (incomplete) {
+    state.message = "各ロール設定は絵文字とロールをセットで入力してください。";
+    return false;
+  }
+  const seen = new Set();
+  for (const option of normalized.options) {
+    if (!option.emoji || !option.role_id) {
+      continue;
+    }
+    const key = rolePanelEmojiKey(option.emoji);
+    if (seen.has(key)) {
+      state.message = "同じ絵文字は1つのロールにだけ設定してください。";
+      return false;
+    }
+    seen.add(key);
+  }
+  return true;
+}
+
+function rolePanelEmojiKey(emoji) {
+  const value = String(emoji ?? "").trim();
+  const compact = value.replace(/^<|>$/g, "");
+  const parts = compact.split(":");
+  return (parts.length === 2 || parts.length === 3) && /^\d+$/.test(parts.at(-1))
+    ? `custom:${parts.at(-1)}`
+    : `unicode:${value}`;
 }
 
 function buildBumpRankPatch(settings) {
@@ -4530,6 +4796,8 @@ function resetGuardAuthenticatedState() {
   state.guard.loggingSettings = [];
   state.guard.invitationSettings = [];
   state.guard.riskSettings = [];
+  state.guard.riskActions = GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
+  state.guard.riskMemberActionsEnabled = false;
   state.guard.verificationOptions = null;
   state.guard.verificationOptionsError = null;
   state.guard.verificationRecords = [];
@@ -4614,6 +4882,7 @@ function resetSessionState() {
   state.requestIds.rankings += 1;
   state.requestIds.guildOptions += 1;
   state.requestIds.ticketPanel += 1;
+  state.requestIds.rolePanel += 1;
   state.security.requestId += 1;
   state.security.loading = true;
   state.security.verifying = false;
@@ -4636,6 +4905,7 @@ function resetSessionState() {
   state.ttsOptions = null;
   state.guildDataError = null;
   state.ticketPanelPublishing = false;
+  state.rolePanelPublishing = false;
   state.operationNotice = null;
   state.hostStatus = null;
   state.hostLogs = [];
@@ -4662,6 +4932,7 @@ function resetSessionState() {
   state.playlistSearchResults = [];
   state.playlistSearchQuery = "";
   state.playlistDragActive = false;
+  state.playlistImportProgress = null;
   state.userActivity = null;
   state.userActivityLoading = false;
   state.userActivityError = null;
@@ -5913,6 +6184,16 @@ async function performGuardDataLoad(options = {}) {
       }
       if (riskResult.status === "fulfilled") {
         state.guard.riskSettings = normalizeGuardRiskSettings(riskResult.value?.settings);
+        const riskActions = Array.isArray(riskResult.value?.actions)
+          ? riskResult.value.actions.map((action) => ({
+              id: String(action?.id ?? ""),
+              label: String(action?.label ?? action?.id ?? ""),
+            })).filter((action) => action.id)
+          : [];
+        state.guard.riskActions = riskActions.length
+          ? riskActions
+          : GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
+        state.guard.riskMemberActionsEnabled = riskResult.value?.member_actions_enabled === true;
       }
       state.guard.verificationRecords = [];
       if (optionsResult.status === "fulfilled" && optionsResult.value) {
@@ -5982,6 +6263,8 @@ async function performGuardDataLoad(options = {}) {
   state.guard.moderationCatalog = normalizeGuardModerationCatalog(null);
   state.guard.loggingSettings = [];
   state.guard.riskSettings = [];
+  state.guard.riskActions = GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
+  state.guard.riskMemberActionsEnabled = false;
   state.guard.verificationOptions = null;
   state.guard.verificationRecords = [];
   hydrateGuardVerificationForm();
@@ -7204,6 +7487,7 @@ function normalizeGuardModerationCatalog(payload) {
     levels: levels.length ? levels : GUARD_MODERATION_LEVELS,
     actions: actions.length ? actions : GUARD_MODERATION_ACTIONS,
     rules: isObject(payload?.rules) ? payload.rules : {},
+    member_actions_enabled: payload?.member_actions_enabled === true,
   };
 }
 
@@ -7938,6 +8222,7 @@ function renderGuardModeration() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>はじめて設定する場合は、必要な検知を有効にして「ゆるめ」から試し、処罰内容を確認して保存してください。検知条件が書かれたカード自体を押すとペースを選べます。</span>
       </div>
+      ${state.guard.moderationCatalog.member_actions_enabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、メッセージ内容や投稿回数からの自動キック／BANは無効です。検知時の処理はログまたはメッセージ削除までに制限されます。</span></div>`}
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
       ${state.guard.moderationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.moderationMessage)}</span></p>` : ""}
       <form class="guard-moderation-form" data-guard-moderation-form>
@@ -8147,7 +8432,7 @@ function renderGuardRiskActionField(field, label, value, description) {
     <label class="field">
       <span>${escapeHtml(label)}</span>
       <select data-guard-risk-field="${escapeAttribute(field)}">
-        ${GUARD_RISK_ACTIONS.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === value ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
+        ${state.guard.riskActions.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === value ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
       </select>
       <small>${escapeHtml(description)}</small>
     </label>
@@ -8174,6 +8459,7 @@ function renderGuardRisk() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>アカウント年齢、アイコン・表示名、ユーザー名の生成パターン、招待リンクの参加増加、招待元、Guardが観測した他サーバーの処分歴を組み合わせて0〜100%で判定します。DiscordのBot APIから取得できない自己紹介は判定対象外で、未観測の情報は推測しません。</span>
       </div>
+      ${state.guard.riskMemberActionsEnabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、アカウント年齢などの危険度推測だけでユーザーをキック／BANする処置は無効です。管理者通知とログで確認してください。</span></div>`}
       ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">サーバー一覧から設定対象を選択してください。</p>`}
       ${state.guard.riskError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.riskError)}</span></p>` : ""}
       ${state.guard.riskMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.riskMessage)}</span></p>` : ""}
@@ -9191,6 +9477,7 @@ function normalizeGuardAbuseRegistry(payload) {
     approved_alt_user_ids: normalizeGuardModerationIds(item?.approved_alt_user_ids ?? item?.alt_user_ids),
     created_at: item?.created_at ?? null,
     updated_at: item?.updated_at ?? null,
+    decided_at: item?.decided_at ?? null,
     expires_at: item?.expires_at ?? null,
     review_reason: String(item?.review_reason ?? item?.decision_reason ?? ""),
     can_appeal: item?.can_appeal === true,
@@ -9237,7 +9524,7 @@ async function loadGuardAbuseRegistry(options = {}) {
     render();
   }
   try {
-    const payload = normalizeGuardAbuseRegistry(await guardFetchJson(guardApiUrl("/abuse-registry/cases")));
+    const payload = normalizeGuardAbuseRegistry(await guardFetchJson(guardApiUrl("/abuse-registry/cases?limit=500")));
     if (!guardSessionIsCurrent(guardSession)) {
       return false;
     }
@@ -9308,15 +9595,16 @@ function renderGuardAbuseRegistry() {
         <button class="icon-button icon-button--ghost" type="button" data-action="refresh-guard-abuse-registry" ${registry.loading ? "disabled" : ""}>${icon("refresh")}<span>${registry.loading ? "読込中" : "更新"}</span></button>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>報告だけでは全体拒否になりません。証拠をGuardオーナーが確認し、承認したユーザーIDと承認済みの別アカウントだけがGuard導入サーバーで拒否対象になります。</span>
+        ${icon("shield")}<span>報告だけでは全体拒否になりません。Guard管理者が内容を確認し、承認したユーザーIDだけがGuard導入サーバーで拒否対象になります。</span>
       </div>
       <p class="guard-inline-hint">端末識別情報や非公開の照合値は、この画面には表示されません。誤りがある場合は各案件から異議申し立てができます。</p>
       ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
       ${registry.message ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(registry.message)}</span></p>` : ""}
       ${registry.loading && !registry.loaded ? `<div class="empty-state">荒らし登録を読み込んでいます…</div>` : `
         ${renderGuardAbuseReportForm(guilds, registry)}
-        ${registry.is_owner ? renderGuardAbuseOwnerQueue(registry) : ""}
-        ${renderGuardAbuseCases(registry)}
+        ${registry.is_owner
+          ? `<div class="status-banner guard-privacy-note">${icon("lock")}<span>承認、直接登録、登録済みユーザー一覧は「管理者用」へ移動しました。</span></div>`
+          : renderGuardAbuseCases(registry)}
       `}
     </section>
   `;
@@ -9327,14 +9615,12 @@ function renderGuardAbuseReportForm(guilds, registry) {
   return `
     <article class="feature-card guard-registry-report">
       <div class="feature-card__header"><div class="panel-heading">${icon("message")}<h2>新しい報告</h2></div></div>
-      <p>実際に確認できる証拠を添えてください。憶測だけの報告や、嫌がらせ目的の登録は禁止です。</p>
+      <p>確認した行為を具体的に記入してください。憶測だけの報告や、嫌がらせ目的の登録は禁止です。</p>
       <form class="settings-grid guard-registry-form" data-guard-abuse-report-form>
         <label class="field"><span>発生したサーバー</span><select name="source_guild_id" required>${guilds.map((guild) => `<option value="${escapeAttribute(guild.id)}" ${guild.id === activeGuardSelectedGuild()?.id ? "selected" : ""}>${escapeHtml(guild.name)}</option>`).join("")}</select></label>
         <label class="field"><span>対象ユーザーID</span><input name="subject_user_id" inputmode="numeric" pattern="[0-9]{15,22}" required placeholder="123456789012345678" /></label>
         <label class="field"><span>理由</span><select name="reason_code" required>${reasons.map((reason) => `<option value="${escapeAttribute(reason.id)}">${escapeHtml(reason.label)}</option>`).join("")}</select></label>
         <label class="field guard-registry-wide"><span>何が起きたか</span><textarea name="reason_text" maxlength="2000" required placeholder="日時、行為、影響を具体的に記入"></textarea></label>
-        <label class="field guard-registry-wide"><span>証拠URL（1行に1件）</span><textarea name="evidence_urls" maxlength="20000" required placeholder="https://discord.com/channels/...&#10;https://example.com/evidence"></textarea><small>最大20件・1件1,000文字。Discordメッセージリンクや、権限のある人が確認できる資料を記入してください。</small></label>
-        <label class="field guard-registry-wide"><span>証拠の補足メモ</span><textarea name="evidence_note" maxlength="1000" placeholder="URLの内容や確認方法"></textarea></label>
         <label class="field guard-registry-wide"><span>把握している別アカウントID（任意）</span><textarea name="reported_alt_user_ids" maxlength="2000" placeholder="1行に1 ID"></textarea><small>最大20件。関連を説明できるものだけを報告してください。承認前は拒否対象になりません。</small></label>
         <div class="guard-registry-confirm"><label><input type="checkbox" name="confirmed" required /> 内容が事実に基づき、虚偽報告ではないことを確認しました</label></div>
         <button class="icon-button icon-button--primary" type="submit" ${registry.saving || !guilds.length ? "disabled" : ""}>${icon("shield")}<span>審査へ送る</span></button>
@@ -9349,7 +9635,8 @@ function renderGuardAbuseOwnerQueue(registry) {
   return `
     <article class="feature-card guard-registry-owner">
       <div class="feature-card__header"><div class="panel-heading">${icon("lock")}<h2>Guardオーナー審査</h2></div><span class="feature-status ${pending.length + appeals.length ? "feature-status--on" : ""}">${pending.length + appeals.length}件</span></div>
-      <p>承認するとGuard全体の拒否対象になります。証拠と対象IDを再確認し、判断理由を必ず残してください。</p>
+      <p>承認するとGuard全体の拒否対象になります。対象IDと報告内容を再確認し、判断理由を必ず残してください。</p>
+      ${pending.length ? `<h3>登録申請</h3>${pending.map((item) => renderGuardAbuseCaseCard(item, registry)).join("")}` : `<p class="guard-inline-hint">審査待ちの登録申請はありません。</p>`}
       ${appeals.length ? `<h3>異議申し立て</h3>${appeals.map(renderGuardAbuseAppealCard).join("")}` : `<p class="guard-inline-hint">審査待ちの異議申し立てはありません。</p>`}
     </article>
   `;
@@ -9361,6 +9648,77 @@ function renderGuardAbuseCases(registry) {
       <div class="settings-panel__header"><div class="panel-heading">${icon("history")}<h2>${registry.is_owner ? "登録案件" : "報告した案件"}</h2></div><span>${registry.cases.length}件</span></div>
       ${registry.cases.length ? registry.cases.map((item) => renderGuardAbuseCaseCard(item, registry)).join("") : `<div class="empty-state">表示できる案件はありません。</div>`}
     </div>
+  `;
+}
+
+function guardRegisteredUsers(registry) {
+  const users = new Map();
+  registry.cases
+    .filter((item) => item.status === "approved")
+    .forEach((item) => {
+      const identities = [
+        { user_id: item.subject_user_id, link_type: "primary" },
+        ...item.approved_alt_user_ids.map((userId) => ({ user_id: userId, link_type: "manual_alt" })),
+      ];
+      identities.forEach((identity) => {
+        if (!identity.user_id || users.has(identity.user_id)) {
+          return;
+        }
+        users.set(identity.user_id, {
+          ...identity,
+          case_id: item.id,
+          reason_code: item.reason_code,
+          registered_at: item.decided_at || item.updated_at || item.created_at,
+          expires_at: item.expires_at,
+        });
+      });
+    });
+  return [...users.values()].sort((left, right) => String(right.registered_at ?? "").localeCompare(String(left.registered_at ?? "")));
+}
+
+function renderGuardRegisteredUsers(registry) {
+  const users = guardRegisteredUsers(registry);
+  const total = Number(registry.stats?.approved_identity_count ?? users.length) || users.length;
+  return `
+    <article class="feature-card guard-registry-registered">
+      <div class="feature-card__header"><div class="panel-heading">${icon("user")}<h2>登録済みユーザー一覧</h2></div><span class="feature-status ${users.length ? "feature-status--on" : ""}">${users.length}${total > users.length ? ` / ${total}` : ""}人</span></div>
+      ${users.length ? `<div class="guard-registered-user-list">${users.map((item) => `
+        <div class="guard-registered-user-row">
+          <div><strong>${escapeHtml(item.user_id)}</strong><small>${item.link_type === "primary" ? "登録対象" : "承認済み別アカウント"} · ${escapeHtml(guardText(item.reason_code, "理由未設定"))}</small></div>
+          <div><small>登録 ${escapeHtml(formatDateTime(item.registered_at))}</small>${item.expires_at ? `<small>期限 ${escapeHtml(formatDateTime(item.expires_at))}</small>` : ""}</div>
+        </div>
+      `).join("")}</div>` : `<div class="empty-state">登録済みユーザーはいません。</div>`}
+    </article>
+  `;
+}
+
+function renderGuardAbuseAdminPanel() {
+  const registry = state.guard.abuseRegistry;
+  const sourceGuild = activeGuardSelectedGuild() ?? guardConfigurableGuilds()[0] ?? null;
+  const approvedCases = registry.cases.filter((item) => item.status === "approved");
+  return `
+    <section class="host-card guard-registry-admin" aria-label="荒らし登録管理">
+      <div class="host-card__header">
+        ${icon("alert")}<h3>荒らし登録管理</h3>
+        <button class="icon-button icon-button--ghost" type="button" data-action="refresh-guard-abuse-registry" ${registry.loading ? "disabled" : ""}>${icon("refresh")}<span>${registry.loading ? "読込中" : "更新"}</span></button>
+      </div>
+      ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
+      ${registry.message ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(registry.message)}</span></p>` : ""}
+      ${registry.loading && !registry.loaded ? `<div class="empty-state">荒らし登録を読み込んでいます…</div>` : !registry.is_owner ? `<div class="empty-state">Guard管理者権限を確認できませんでした。</div>` : `
+        <article class="feature-card guard-registry-direct">
+          <div class="feature-card__header"><div class="panel-heading">${icon("lock")}<h2>ユーザーIDから直接登録</h2></div></div>
+          <p>申請を作成せず、入力したDiscordユーザーIDだけを拒否対象へ登録します。端末情報や別ユーザーは自動で関連付けません。</p>
+          <form class="guard-registry-direct-form" data-guard-abuse-direct-form>
+            <label class="field"><span>DiscordユーザーID</span><input name="subject_user_id" inputmode="numeric" pattern="[0-9]{15,22}" required placeholder="123456789012345678" /></label>
+            <button class="icon-button icon-button--primary" type="submit" ${registry.saving || !sourceGuild ? "disabled" : ""}>${icon("shield")}<span>直接登録</span></button>
+          </form>
+          ${sourceGuild ? `<small class="guard-inline-hint">管理記録の対象サーバー: ${escapeHtml(sourceGuild.name)} (${escapeHtml(sourceGuild.id)})</small>` : `<small class="guard-inline-hint">管理記録に使用できるサーバーがありません。</small>`}
+        </article>
+        ${renderGuardAbuseOwnerQueue(registry)}
+        ${renderGuardRegisteredUsers(registry)}
+        ${approvedCases.length ? `<details class="guard-registry-approved-management"><summary>登録内容の変更・取消</summary><div class="guard-registry-list">${approvedCases.map((item) => renderGuardAbuseCaseCard(item, registry)).join("")}</div></details>` : ""}
+      `}
+    </section>
   `;
 }
 
@@ -9419,37 +9777,55 @@ async function submitGuardAbuseReport(formElement) {
   const sourceGuildId = String(data.get("source_guild_id") ?? "");
   const subjectUserId = normalizeGuardModerationIds(data.get("subject_user_id"))[0] ?? "";
   const reasonText = String(data.get("reason_text") ?? "").trim();
-  const rawEvidenceUrls = String(data.get("evidence_urls") ?? "").split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
   const reportedAltUserIds = normalizeGuardModerationIds(data.get("reported_alt_user_ids"));
-  if (rawEvidenceUrls.length > 20 || rawEvidenceUrls.some((url) => url.length > 1000) || reportedAltUserIds.length > 20) {
-    state.guard.abuseRegistry.error = "証拠URLと別アカウントIDは各20件まで、証拠URLは1件1,000文字までです。";
+  if (reportedAltUserIds.length > 20) {
+    state.guard.abuseRegistry.error = "別アカウントIDは20件までです。";
     render();
     return;
   }
-  const evidenceUrls = rawEvidenceUrls.map(guardSafeEvidenceUrl).filter(Boolean);
-  if (evidenceUrls.length !== rawEvidenceUrls.length) {
-    state.guard.abuseRegistry.error = "証拠URLは有効なHTTP(S) URLを1行に1件ずつ入力してください。";
-    render();
-    return;
-  }
-  if (!guardConfigurableGuilds().some((guild) => guild.id === sourceGuildId) || !subjectUserId || !reasonText || !evidenceUrls.length || data.get("confirmed") !== "on") {
-    state.guard.abuseRegistry.error = "サーバー、対象ユーザーID、具体的な理由、有効な証拠URL、確認チェックを入力してください。";
+  if (!guardConfigurableGuilds().some((guild) => guild.id === sourceGuildId) || !subjectUserId || !reasonText || data.get("confirmed") !== "on") {
+    state.guard.abuseRegistry.error = "サーバー、対象ユーザーID、具体的な理由、確認チェックを入力してください。";
     render();
     return;
   }
   if (!window.confirm("この内容をGuardオーナーの審査へ送ります。虚偽報告でないことをもう一度確認してください。")) {
     return;
   }
-  const note = String(data.get("evidence_note") ?? "").trim();
   await mutateGuardAbuseRegistry("/abuse-registry/cases", {
     source_guild_id: sourceGuildId,
     subject_user_id: subjectUserId,
     reason_code: String(data.get("reason_code") ?? "other"),
     reason_text: reasonText,
-    evidence: evidenceUrls.map((url) => ({ type: "message_link", url, note })),
+    evidence: [],
     reported_alt_user_ids: reportedAltUserIds,
     idempotency_key: guardRegistryIdempotencyKey("case"),
   }, "荒らし報告を審査へ送りました。承認されるまでは全体拒否に反映されません。");
+}
+
+async function directRegisterGuardAbuseUser(formElement) {
+  const registry = state.guard.abuseRegistry;
+  if (!registry.is_owner) {
+    return;
+  }
+  const data = new FormData(formElement);
+  const subjectUserId = normalizeGuardModerationIds(data.get("subject_user_id"))[0] ?? "";
+  const sourceGuild = activeGuardSelectedGuild() ?? guardConfigurableGuilds()[0] ?? null;
+  if (!subjectUserId || !sourceGuild) {
+    registry.error = "有効なDiscordユーザーIDと管理記録用サーバーが必要です。";
+    render();
+    return;
+  }
+  if (!window.confirm(`${subjectUserId} を申請なしで荒らし登録します。ユーザーIDに間違いがないことを確認しましたか？`)) {
+    return;
+  }
+  const saved = await mutateGuardAbuseRegistry("/abuse-registry/direct", {
+    source_guild_id: sourceGuild.id,
+    subject_user_id: subjectUserId,
+    idempotency_key: guardRegistryIdempotencyKey("direct"),
+  }, `${subjectUserId} を直接登録しました。`);
+  if (saved) {
+    formElement.reset();
+  }
 }
 
 async function submitGuardAbuseAppeal(formElement) {
@@ -9495,7 +9871,7 @@ async function reviewGuardAbuseCase(actionElement) {
     return;
   }
   const labels = { approve: "承認して全体拒否へ反映", reject: "報告を却下", revoke: "承認済み登録を取消", add_alt: "別アカウントを追加", remove_alt: "別アカウントを削除" };
-  if (!window.confirm(`${labels[action]}します。対象と証拠を確認しましたか？`)) {
+  if (!window.confirm(`${labels[action]}します。対象IDと報告内容を確認しましたか？`)) {
     return;
   }
   const body = { action, reason };
@@ -10376,16 +10752,22 @@ function renderActivityMetricCard(title, value, metric, points, lineClass) {
 
 function renderActivitySparkline(points, metric, lineClass) {
   const linePoints = activitySparklinePoints(points, metric);
+  const [pointX, pointY] = linePoints.split(",");
   return `
     <svg class="activity-sparkline" viewBox="0 0 320 110" role="img" aria-label="アクティビティ推移">
       <path class="activity-grid-line" d="M14 18 H306 M14 55 H306 M14 92 H306"></path>
       <polyline class="activity-line ${lineClass}" points="${escapeAttribute(linePoints)}"></polyline>
+      ${points.length === 1 ? `<circle class="activity-line ${lineClass}" cx="${pointX}" cy="${pointY}" r="4"></circle>` : ""}
     </svg>
   `;
 }
 
 function renderPlaylistPanel(playlist) {
   const tracks = playlist.tracks ?? [];
+  const uploadProgress = state.playlistImportProgress;
+  const uploadDescription = uploadProgress
+    ? `${uploadProgress.current}/${uploadProgress.total}件を取り込み中: ${uploadProgress.filename}`
+    : "音声ファイルをまとめてドラッグアンドドロップ";
   return `
     <section class="feature-card playlist-panel" aria-label="プレイリスト">
       <div class="feature-card__header playlist-panel__header">
@@ -10402,20 +10784,20 @@ function renderPlaylistPanel(playlist) {
       ${renderPlaylistSpotlight(tracks)}
       <form class="playlist-url-form" data-playlist-url-form>
         <label class="field playlist-url-form__field">
-          <span>曲名または音楽サービスURL</span>
-          <input type="text" value="${escapeAttribute(state.playlistUrl)}" placeholder="曲名 / Spotify・Apple Music・Amazon Music・SoundCloud URL" data-playlist-field="url" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""} />
+          <span>曲名または音楽サービスの公開プレイリストURL</span>
+          <input type="text" value="${escapeAttribute(state.playlistUrl)}" placeholder="曲名 / Spotify・Apple Music・Amazon Music・SoundCloudの公開プレイリストURL" data-playlist-field="url" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""} />
         </label>
         <button class="icon-button icon-button--primary" type="submit" ${state.playlistSaving || state.playlistSearchLoading ? "disabled" : ""}>
-          ${icon(isHttpUrl(state.playlistUrl) ? "link" : "search")}<span>${state.playlistSaving ? "登録中" : state.playlistSearchLoading ? "検索中" : "検索 / 登録"}</span>
+          ${icon(isHttpUrl(state.playlistUrl) ? "link" : "search")}<span>${state.playlistSaving ? "取り込み中" : state.playlistSearchLoading ? "検索中" : isHttpUrl(state.playlistUrl) ? "取り込む" : "検索"}</span>
         </button>
       </form>
       ${renderPlaylistSearchResults()}
       <div class="playlist-drop-zone ${state.playlistDragActive ? "playlist-drop-zone--active" : ""}" data-playlist-drop-zone>
-        <input type="file" accept="audio/mpeg,.mp3" data-playlist-file-input hidden />
+        <input type="file" accept="${PLAYLIST_AUDIO_FILE_ACCEPT}" multiple data-playlist-file-input hidden />
         <div>
           ${icon("upload")}
-          <strong>mp3をドラッグアンドドロップ</strong>
-          <span>ファイル選択からも登録できます。</span>
+          <strong>${escapeHtml(uploadDescription)}</strong>
+          <span>MP3・WAV・OGG・M4A・FLAC・AAC・Opusを複数まとめて登録できます。</span>
         </div>
         <button class="icon-button icon-button--ghost" type="button" data-action="playlist-choose-file" ${state.playlistSaving ? "disabled" : ""}>
           ${icon("folder")}<span>ファイル選択</span>
@@ -10425,7 +10807,7 @@ function renderPlaylistPanel(playlist) {
         ${
           tracks.length
             ? tracks.map(renderPlaylistTrack).join("")
-            : `<div class="empty-state">登録曲はまだありません。曲名検索、音楽サービスURL、mp3アップロードで追加できます。</div>`
+            : `<div class="empty-state">登録曲はまだありません。曲名検索、音楽サービスのプレイリストURL、音声ファイルの一括アップロードで追加できます。</div>`
         }
       </div>
     </section>
@@ -10482,12 +10864,12 @@ function renderPlaylistSpotlight(tracks) {
       <div class="playlist-spotlight__copy">
         <span>Discat One Playlist</span>
         <strong>曲名検索もサービスURLも、すぐ再生できる曲リストに</strong>
-        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "曲名検索、SpotifyなどのURL、mp3を追加すると、ここに自分の曲が並びます。")}</p>
+        <p>${escapeHtml(latestTrack ? `最新: ${latestTrack.title}` : "曲名検索、音楽サービスのプレイリストURL、音声ファイルを追加すると、ここに自分の曲が並びます。")}</p>
         <div class="playlist-spotlight__chips" aria-label="対応している登録方法">
           <span>${icon("search")}曲名検索</span>
           <span>${icon("link")}Spotify / Apple</span>
           <span>${icon("link")}Amazon / SoundCloud</span>
-          <span>${icon("upload")}mp3対応</span>
+          <span>${icon("upload")}複数形式・一括取込</span>
         </div>
       </div>
       <div class="playlist-spotlight__stat">
@@ -10498,8 +10880,15 @@ function renderPlaylistSpotlight(tracks) {
   `;
 }
 
+function playlistUploadSourceLabel(track) {
+  const filename = String(track?.original_filename ?? "").trim();
+  const dotIndex = filename.lastIndexOf(".");
+  const extension = dotIndex >= 0 ? filename.slice(dotIndex + 1).toUpperCase() : "";
+  return extension ? `${extension}アップロード` : "音声ファイルアップロード";
+}
+
 function renderPlaylistTrack(track, options = {}) {
-  const sourceLabel = track.source_type === "upload" ? "mp3アップロード" : "URL";
+  const sourceLabel = track.source_type === "upload" ? playlistUploadSourceLabel(track) : "URL";
   const readonly = Boolean(options.readonly);
   const ownerUserId = normalizeNullableString(options.ownerUserId);
   const escapedTrackId = escapeAttribute(track.id);
@@ -11062,6 +11451,7 @@ function renderFeatureSettingsForm() {
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
     "temporary-vc": () => renderTemporaryVoiceSettings(voiceChannels, categories),
     "ticket": () => renderTicketSettings(categories, textChannels, roles),
+    "role-panel": () => renderRolePanelSettings(textChannels, roles),
     "server-rank": () => renderServerRankSettings(textChannels),
     "bump-rank": () => renderBumpRankSettings(textChannels, roles),
   }[page.id]?.() ?? renderGlobalChatSettings(textChannels);
@@ -11439,6 +11829,97 @@ function renderTicketSettings(categories, textChannels, roles) {
         </button>
       </div>
     </section>
+  `;
+}
+
+function renderRolePanelSettings(textChannels, roles) {
+  const settings = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  const channel = textChannels.find((item) => item.id === settings.channel_id);
+  const configuredOptions = settings.options.filter((option) => option.emoji && option.role_id);
+  const enabled = Boolean(settings.channel_id && configuredOptions.length > 0);
+  const optionsLoading = selectedGuildCanConfigure() && !state.ttsOptions;
+  const panelMessageUrl =
+    state.selectedGuildId && settings.channel_id && settings.message_id
+      ? `https://discord.com/channels/${encodeURIComponent(state.selectedGuildId)}/${encodeURIComponent(settings.channel_id)}/${encodeURIComponent(settings.message_id)}`
+      : "";
+  const publishDisabled = state.rolePanelPublishing || optionsLoading || !enabled || !selectedGuildCanConfigure();
+  return `
+    <section class="feature-card ticket-settings-card" aria-label="ロールパネル設定">
+      <div class="feature-card__header">
+        <div class="panel-heading">
+          ${icon("shield")}<h2>ロールパネル</h2>
+        </div>
+        <span class="feature-status ${enabled ? "feature-status--on" : ""}">
+          ${enabled ? "設定済み" : "未設定"}
+        </span>
+      </div>
+      <div class="settings-grid">
+        <label class="field">
+          <span>パネル送信先チャンネル</span>
+          <select ${renderPersistentOptionListAttributes(textChannels)} data-role-panel-field="channel_id" ${optionsLoading ? "disabled" : ""}>
+            <option value="">未設定</option>
+            ${textChannels.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>パネルタイトル（テーマ）</span>
+          <input type="text" maxlength="100" value="${escapeAttribute(settings.theme)}" data-role-panel-field="theme" />
+        </label>
+        <div class="field feature-summary feature-summary--wide">
+          <span>現在の設定</span>
+          <strong>${channel ? `#${escapeHtml(channel.name)}` : "送信先未設定"} / ${configuredOptions.length}件のロール</strong>
+        </div>
+      </div>
+      <div class="sticky-rules role-panel-options">
+        <div class="sticky-rules__header">
+          <span>リアクション絵文字とロール</span>
+          <button class="icon-button icon-button--ghost" type="button" data-action="add-role-panel-option" ${optionsLoading || settings.options.length >= ROLE_PANEL_MAX_OPTIONS ? "disabled" : ""}>
+            ${icon("plus")}<span>追加</span>
+          </button>
+        </div>
+        <div class="sticky-rules__list">
+          ${
+            settings.options.length > 0
+              ? settings.options.map((option, index) => renderRolePanelOption(option, index, roles, optionsLoading)).join("")
+              : `<div class="empty-state">絵文字とロールの組み合わせを追加してください。</div>`
+          }
+        </div>
+      </div>
+      <div class="settings-panel__footer">
+        ${icon("info")}<span>ユーザーのリアクションはすぐに削除され、各絵文字はBotのリアクション1件だけが残ります。同じ絵文字をもう一度押すとロールを剥がし、結果メッセージはこのチャンネルに10秒間だけ表示されます。</span>
+      </div>
+      <div class="feature-card__actions">
+        ${
+          panelMessageUrl
+            ? `<a class="icon-button icon-button--ghost" href="${escapeAttribute(panelMessageUrl)}" target="_blank" rel="noopener">${icon("external")}<span>現在のパネルを開く</span></a>`
+            : ""
+        }
+        <button class="icon-button icon-button--primary" type="button" data-action="publish-role-panel" ${publishDisabled ? "disabled" : ""}>
+          ${icon(state.rolePanelPublishing ? "refresh" : "shield")}<span>${state.rolePanelPublishing ? "送信中" : "パネルを送信"}</span>
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+function renderRolePanelOption(option, index, roles, optionsLoading) {
+  return `
+    <div class="dictionary-row">
+      <label class="field dictionary-row__field">
+        <span>リアクション絵文字</span>
+        <input type="text" maxlength="100" value="${escapeAttribute(option.emoji)}" placeholder="例: 🎮 または &lt;:name:id&gt;" data-role-panel-option-index="${index}" data-role-panel-option-field="emoji" ${optionsLoading ? "disabled" : ""} />
+      </label>
+      <label class="field dictionary-row__field">
+        <span>付与するロール</span>
+        <select data-role-panel-option-index="${index}" data-role-panel-option-field="role_id" ${optionsLoading ? "disabled" : ""}>
+          <option value="">未設定</option>
+          ${roles.map((role) => `<option value="${escapeAttribute(role.id)}" ${role.id === option.role_id ? "selected" : ""} ${role.managed ? "disabled" : ""}>@${escapeHtml(role.name)}${role.managed ? "（管理ロール）" : ""}</option>`).join("")}
+        </select>
+      </label>
+      <button class="icon-button icon-button--ghost dictionary-row__remove" type="button" data-action="remove-role-panel-option" data-index="${index}" title="削除" ${optionsLoading ? "disabled" : ""}>
+        ${icon("trash")}
+      </button>
+    </div>
   `;
 }
 
@@ -12192,6 +12673,7 @@ function renderGuardHostAdminPanel() {
         ${renderMetricTile("API接続", state.guard.source === "api" ? "接続中" : "未接続", state.guard.health?.api_contract_version || "未取得", state.guard.source === "api")}
         ${renderMetricTile("Security Log", status.security_log_enabled ? "有効" : "無効", status.security_log_path, status.security_log_enabled)}
       </div>
+      ${renderGuardAbuseAdminPanel()}
       ${renderAdminGuildAccessPanel({
         botLabel: "Discat Guard",
         guilds: status.guilds ?? [],
@@ -12584,6 +13066,8 @@ function collectStatusToasts() {
     toasts.push({ tone: "info", title: "💾 設定を保存中", message: "Botへ安全に送信しています。このままお待ちください。" });
   } else if (state.ticketPanelPublishing) {
     toasts.push({ tone: "info", title: "📨 パネルを送信中", message: "Discordへの送信結果を確認しています。" });
+  } else if (state.rolePanelPublishing) {
+    toasts.push({ tone: "info", title: "📨 ロールパネルを送信中", message: "Discordへの送信結果を確認しています。" });
   }
   if (state.message) {
     toasts.push({ tone: "error", message: state.message });
@@ -12802,7 +13286,7 @@ function loadActiveGuardFeatureData() {
   if (state.activeProduct !== "guard") {
     return;
   }
-  if (activeGuardFeature().id === "abuse-registry") {
+  if (["abuse-registry", "admin"].includes(activeGuardFeature().id)) {
     void loadGuardAbuseRegistry();
     return;
   }
@@ -12950,6 +13434,9 @@ function handleSubmit(event) {
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-report-form]")) {
     event.preventDefault();
     void submitGuardAbuseReport(target);
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-direct-form]")) {
+    event.preventDefault();
+    void directRegisterGuardAbuseUser(target);
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-abuse-appeal-form]")) {
     event.preventDefault();
     void submitGuardAbuseAppeal(target);
@@ -12994,8 +13481,8 @@ function handleDrop(event) {
   }
   event.preventDefault();
   state.playlistDragActive = false;
-  const file = event.dataTransfer?.files?.[0] ?? null;
-  void uploadPlaylistFile(file);
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  void uploadPlaylistFiles(files);
 }
 
 function handlePointerDown(event) {
@@ -13192,6 +13679,8 @@ function handleClick(event) {
       void saveFeatureSettings();
     } else if (action === "publish-ticket-panel") {
       void publishTicketPanel();
+    } else if (action === "publish-role-panel") {
+      void publishRolePanel();
     } else if (action === "save-pending-settings") {
       void savePendingSettings();
     } else if (action === "discard-pending-settings") {
@@ -13227,6 +13716,25 @@ function handleClick(event) {
     } else if (action === "remove-sticky-message") {
       const index = Number(actionEl.dataset.index);
       state.featureSettings.sticky_messages = state.featureSettings.sticky_messages.filter((_, ruleIndex) => ruleIndex !== index);
+      updateDirtyState("features");
+      render();
+    } else if (action === "add-role-panel-option") {
+      const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+      if (current.options.length < ROLE_PANEL_MAX_OPTIONS) {
+        state.featureSettings.role_panel = {
+          ...current,
+          options: [...current.options, { emoji: "", role_id: "" }],
+        };
+        updateDirtyState("features");
+        render();
+      }
+    } else if (action === "remove-role-panel-option") {
+      const index = Number(actionEl.dataset.index);
+      const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+      state.featureSettings.role_panel = {
+        ...current,
+        options: current.options.filter((_, optionIndex) => optionIndex !== index),
+      };
       updateDirtyState("features");
       render();
     } else if (action === "clear-vc-notification") {
@@ -13370,6 +13878,10 @@ function handleChange(event) {
     updateTemporaryVoiceField(target);
   } else if (target.dataset.ticketField) {
     updateTicketField(target);
+  } else if (target.dataset.rolePanelField) {
+    updateRolePanelField(target);
+  } else if (target.dataset.rolePanelOptionField) {
+    updateRolePanelOptionField(target);
   } else if (target.dataset.vcNotificationField) {
     updateVcNotificationField(target);
   } else if (target.dataset.bumpRankField) {
@@ -13377,9 +13889,9 @@ function handleChange(event) {
   } else if (target.dataset.bumpRankSource) {
     updateBumpRankSource(target);
   } else if ("playlistFileInput" in target.dataset) {
-    const file = target.files?.[0] ?? null;
+    const files = Array.from(target.files ?? []);
     target.value = "";
-    void uploadPlaylistFile(file);
+    void uploadPlaylistFiles(files);
   } else if ("playlistSeek" in target.dataset) {
     handlePlaylistSeekInput(target);
   }
@@ -13442,6 +13954,16 @@ function handleInput(event) {
 
   if (target.dataset.ticketField) {
     updateTicketField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.rolePanelField) {
+    updateRolePanelField(target, { renderAfter: false });
+    return;
+  }
+
+  if (target.dataset.rolePanelOptionField) {
+    updateRolePanelOptionField(target, { renderAfter: false });
     return;
   }
 
@@ -13752,6 +14274,51 @@ function updateTicketField(target, options = { renderAfter: true }) {
   state.featureSettings.ticket = {
     ...current,
     ...patch,
+  };
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateRolePanelField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const field = target.dataset.rolePanelField;
+  if (!field) {
+    return;
+  }
+  const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  const value = field === "theme"
+    ? String(target.value ?? "").slice(0, 100)
+    : target.value;
+  state.featureSettings.role_panel = {
+    ...current,
+    [field]: value,
+  };
+  updateDirtyState("features");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
+function updateRolePanelOptionField(target, options = { renderAfter: true }) {
+  if (!state.featureSettings) {
+    return;
+  }
+  const index = Number(target.dataset.rolePanelOptionIndex);
+  const field = target.dataset.rolePanelOptionField;
+  const current = normalizeRolePanelSettings(state.featureSettings.role_panel);
+  if (!Number.isInteger(index) || !field || !current.options[index]) {
+    return;
+  }
+  const value = field === "emoji" ? String(target.value ?? "").slice(0, 100) : target.value;
+  state.featureSettings.role_panel = {
+    ...current,
+    options: current.options.map((option, optionIndex) =>
+      optionIndex === index ? { ...option, [field]: value } : option,
+    ),
   };
   updateDirtyState("features");
   if (options.renderAfter) {
