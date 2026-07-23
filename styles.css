@@ -6282,8 +6282,7 @@ input[type="checkbox"]:checked::before {
 }
 
 @media (min-width: 861px) {
-  .guild-list,
-  .function-sidebar {
+  .guild-list {
     position: sticky;
     top: 16px;
     max-height: calc(100vh - var(--side-panel-top-offset) - 24px);
