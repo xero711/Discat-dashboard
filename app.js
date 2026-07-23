@@ -952,6 +952,7 @@ const state = {
       is_owner: false,
       actor_user_id: "",
       reason_codes: [],
+      auto_link_verified_devices_enabled: false,
       error: null,
       message: null,
     },
@@ -4822,6 +4823,7 @@ function resetGuardAuthenticatedState() {
     is_owner: false,
     actor_user_id: "",
     reason_codes: [],
+    auto_link_verified_devices_enabled: false,
     error: null,
     message: null,
   };
@@ -8460,7 +8462,7 @@ function renderGuardRisk() {
         ${icon("shield")}<span>アカウント年齢、アイコン・表示名、ユーザー名の生成パターン、招待リンクの参加増加、招待元、Guardが観測した他サーバーの処分歴を組み合わせて0〜100%で判定します。DiscordのBot APIから取得できない自己紹介は判定対象外で、未観測の情報は推測しません。</span>
       </div>
       ${state.guard.riskMemberActionsEnabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、アカウント年齢などの危険度推測だけでユーザーをキック／BANする処置は無効です。管理者通知とログで確認してください。</span></div>`}
-      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">サーバー一覧から設定対象を選択してください。</p>`}
+      ${selectedGuild ? `<p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(selectedGuild.name)}</strong></p>` : `<p class="guard-inline-hint">設定するサーバーを左側から選択してください。</p>`}
       ${state.guard.riskError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.riskError)}</span></p>` : ""}
       ${state.guard.riskMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.riskMessage)}</span></p>` : ""}
       <form class="guard-moderation-form" data-guard-risk-form>
@@ -9465,23 +9467,34 @@ function normalizeGuardAbuseRegistry(payload) {
         sha256: String(item?.sha256 ?? ""),
       })).filter((item) => item.url || item.note || item.guild_id || item.channel_id || item.message_id || item.observed_at || item.sha256)
     : [];
-  const cases = Array.isArray(payload?.cases) ? payload.cases.map((item) => ({
-    id: String(item?.id ?? item?.case_id ?? ""),
-    source_guild_id: String(item?.source_guild_id ?? ""),
-    subject_user_id: String(item?.subject_user_id ?? ""),
-    reason_code: String(item?.reason_code ?? "other"),
-    reason_text: String(item?.reason_text ?? ""),
-    status: String(item?.status ?? "pending"),
-    evidence: normalizeEvidence(item?.evidence),
-    reported_alt_user_ids: normalizeGuardModerationIds(item?.reported_alt_user_ids ?? item?.alt_user_ids),
-    approved_alt_user_ids: normalizeGuardModerationIds(item?.approved_alt_user_ids ?? item?.alt_user_ids),
-    created_at: item?.created_at ?? null,
-    updated_at: item?.updated_at ?? null,
-    decided_at: item?.decided_at ?? null,
-    expires_at: item?.expires_at ?? null,
-    review_reason: String(item?.review_reason ?? item?.decision_reason ?? ""),
-    can_appeal: item?.can_appeal === true,
-  })).filter((item) => item.id) : [];
+  const cases = Array.isArray(payload?.cases) ? payload.cases.map((item) => {
+    const approvedIdentities = Array.isArray(item?.approved_identities)
+      ? item.approved_identities.map((identity) => ({
+          user_id: String(identity?.user_id ?? ""),
+          link_type: String(identity?.link_type ?? "linked_identity"),
+          created_at: identity?.created_at ?? null,
+        })).filter((identity) => identity.user_id)
+      : [];
+    return {
+      id: String(item?.id ?? item?.case_id ?? ""),
+      source_guild_id: String(item?.source_guild_id ?? ""),
+      subject_user_id: String(item?.subject_user_id ?? ""),
+      reason_code: String(item?.reason_code ?? "other"),
+      reason_text: String(item?.reason_text ?? ""),
+      status: String(item?.status ?? "pending"),
+      evidence: normalizeEvidence(item?.evidence),
+      reported_alt_user_ids: normalizeGuardModerationIds(item?.reported_alt_user_ids ?? item?.alt_user_ids),
+      approved_alt_user_ids: normalizeGuardModerationIds(item?.approved_alt_user_ids ?? item?.alt_user_ids),
+      verified_device_alt_user_ids: normalizeGuardModerationIds(item?.verified_device_alt_user_ids),
+      approved_identities: approvedIdentities,
+      created_at: item?.created_at ?? null,
+      updated_at: item?.updated_at ?? null,
+      decided_at: item?.decided_at ?? null,
+      expires_at: item?.expires_at ?? null,
+      review_reason: String(item?.review_reason ?? item?.decision_reason ?? ""),
+      can_appeal: item?.can_appeal === true,
+    };
+  }).filter((item) => item.id) : [];
   const appeals = Array.isArray(payload?.appeals) ? payload.appeals.map((item) => ({
     id: String(item?.id ?? item?.appeal_id ?? ""),
     case_id: String(item?.case_id ?? ""),
@@ -9506,6 +9519,7 @@ function normalizeGuardAbuseRegistry(payload) {
     is_owner: payload?.is_owner === true,
     actor_user_id: String(payload?.actor_user_id ?? ""),
     reason_codes: reasonCodes,
+    auto_link_verified_devices_enabled: payload?.auto_link_verified_devices_enabled === true,
   };
 }
 
@@ -9595,7 +9609,7 @@ function renderGuardAbuseRegistry() {
         <button class="icon-button icon-button--ghost" type="button" data-action="refresh-guard-abuse-registry" ${registry.loading ? "disabled" : ""}>${icon("refresh")}<span>${registry.loading ? "読込中" : "更新"}</span></button>
       </div>
       <div class="status-banner guard-privacy-note">
-        ${icon("shield")}<span>報告だけでは全体拒否になりません。Guard管理者が内容を確認し、承認したユーザーIDだけがGuard導入サーバーで拒否対象になります。</span>
+        ${icon("shield")}<span>報告だけでは全体拒否になりません。Guard管理者が承認したIDと、Guard認証で同一ブラウザインスタンスが確定一致したIDだけが拒否対象になります。</span>
       </div>
       <p class="guard-inline-hint">端末識別情報や非公開の照合値は、この画面には表示されません。誤りがある場合は各案件から異議申し立てができます。</p>
       ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
@@ -9656,10 +9670,21 @@ function guardRegisteredUsers(registry) {
   registry.cases
     .filter((item) => item.status === "approved")
     .forEach((item) => {
-      const identities = [
-        { user_id: item.subject_user_id, link_type: "primary" },
-        ...item.approved_alt_user_ids.map((userId) => ({ user_id: userId, link_type: "manual_alt" })),
-      ];
+      const identities = new Map([
+        [item.subject_user_id, { user_id: item.subject_user_id, link_type: "primary", created_at: item.decided_at }],
+      ]);
+      item.approved_identities.forEach((identity) => {
+        identities.set(identity.user_id, identity);
+      });
+      item.approved_alt_user_ids.forEach((userId) => {
+        if (!identities.has(userId)) {
+          identities.set(userId, {
+            user_id: userId,
+            link_type: item.verified_device_alt_user_ids.includes(userId) ? "verified_device_alt" : "manual_alt",
+            created_at: null,
+          });
+        }
+      });
       identities.forEach((identity) => {
         if (!identity.user_id || users.has(identity.user_id)) {
           return;
@@ -9668,7 +9693,7 @@ function guardRegisteredUsers(registry) {
           ...identity,
           case_id: item.id,
           reason_code: item.reason_code,
-          registered_at: item.decided_at || item.updated_at || item.created_at,
+          registered_at: identity.created_at || item.decided_at || item.updated_at || item.created_at,
           expires_at: item.expires_at,
         });
       });
@@ -9676,6 +9701,13 @@ function guardRegisteredUsers(registry) {
   return [...users.values()].sort((left, right) => String(right.registered_at ?? "").localeCompare(String(left.registered_at ?? "")));
 }
 
+function guardRegisteredIdentityLabel(linkType) {
+  return ({
+    primary: "登録対象",
+    manual_alt: "管理者が承認した別アカウント",
+    verified_device_alt: "Guard認証の端末確定一致",
+  })[linkType] ?? "関連アカウント";
+}
 function renderGuardRegisteredUsers(registry) {
   const users = guardRegisteredUsers(registry);
   const total = Number(registry.stats?.approved_identity_count ?? users.length) || users.length;
@@ -9684,7 +9716,7 @@ function renderGuardRegisteredUsers(registry) {
       <div class="feature-card__header"><div class="panel-heading">${icon("user")}<h2>登録済みユーザー一覧</h2></div><span class="feature-status ${users.length ? "feature-status--on" : ""}">${users.length}${total > users.length ? ` / ${total}` : ""}人</span></div>
       ${users.length ? `<div class="guard-registered-user-list">${users.map((item) => `
         <div class="guard-registered-user-row">
-          <div><strong>${escapeHtml(item.user_id)}</strong><small>${item.link_type === "primary" ? "登録対象" : "承認済み別アカウント"} · ${escapeHtml(guardText(item.reason_code, "理由未設定"))}</small></div>
+          <div><strong>${escapeHtml(item.user_id)}</strong><small>${escapeHtml(guardRegisteredIdentityLabel(item.link_type))} · ${escapeHtml(guardText(item.reason_code, "理由未設定"))}</small></div>
           <div><small>登録 ${escapeHtml(formatDateTime(item.registered_at))}</small>${item.expires_at ? `<small>期限 ${escapeHtml(formatDateTime(item.expires_at))}</small>` : ""}</div>
         </div>
       `).join("")}</div>` : `<div class="empty-state">登録済みユーザーはいません。</div>`}
@@ -9705,9 +9737,10 @@ function renderGuardAbuseAdminPanel() {
       ${registry.error ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(registry.error)}</span></p>` : ""}
       ${registry.message ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(registry.message)}</span></p>` : ""}
       ${registry.loading && !registry.loaded ? `<div class="empty-state">荒らし登録を読み込んでいます…</div>` : !registry.is_owner ? `<div class="empty-state">Guard管理者権限を確認できませんでした。</div>` : `
+        ${registry.auto_link_verified_devices_enabled ? `<div class="status-banner guard-privacy-note">${icon("shield")}<span>Guard認証の同一ブラウザインスタンスによる確定一致は、登録済みユーザーへ自動で関連付けます。端末構成が似ているだけの推測一致は自動登録しません。</span></div>` : ""}
         <article class="feature-card guard-registry-direct">
           <div class="feature-card__header"><div class="panel-heading">${icon("lock")}<h2>ユーザーIDから直接登録</h2></div></div>
-          <p>申請を作成せず、入力したDiscordユーザーIDだけを拒否対象へ登録します。端末情報や別ユーザーは自動で関連付けません。</p>
+          <p>申請を作成せず、入力したDiscordユーザーIDを拒否対象へ登録します。Guard認証で同一端末が確定一致している別アカウントも自動で関連付けます。</p>
           <form class="guard-registry-direct-form" data-guard-abuse-direct-form>
             <label class="field"><span>DiscordユーザーID</span><input name="subject_user_id" inputmode="numeric" pattern="[0-9]{15,22}" required placeholder="123456789012345678" /></label>
             <button class="icon-button icon-button--primary" type="submit" ${registry.saving || !sourceGuild ? "disabled" : ""}>${icon("shield")}<span>直接登録</span></button>
@@ -9735,13 +9768,17 @@ function renderGuardAbuseCaseCard(item, registry) {
     return `<li>${safeUrl ? `<a href="${escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(entry.type || "証拠リンク")}</a>` : `<span>${escapeHtml(entry.type || "証拠")}</span>`}${entry.note ? ` — ${escapeHtml(entry.note)}` : ""}${references ? `<small>${references}</small>` : ""}</li>`;
   }).join("");
   const canAppeal = !registry.is_owner && item.can_appeal && item.status === "approved" && !registry.appeals.some((appeal) => appeal.case_id === item.id && appeal.status === "pending");
+  const verifiedDeviceAltIds = new Set(item.verified_device_alt_user_ids);
+  const manualApprovedAltIds = item.approved_alt_user_ids.filter((userId) => !verifiedDeviceAltIds.has(userId));
   return `
     <article class="feature-card guard-registry-case">
       <div class="feature-card__header"><div><strong>対象: ${escapeHtml(item.subject_user_id)}</strong><small>案件 ${escapeHtml(item.id)}</small></div><span class="feature-status ${item.status === "approved" ? "feature-status--on" : ""}">${escapeHtml(guardAbuseStatusLabel(item.status))}</span></div>
       <dl class="guard-registry-facts"><div><dt>理由</dt><dd>${escapeHtml(item.reason_code)}</dd></div><div><dt>報告サーバー</dt><dd>${escapeHtml(item.source_guild_id)}</dd></div><div><dt>報告日時</dt><dd>${escapeHtml(formatDateTime(item.created_at))}</dd></div>${item.expires_at ? `<div><dt>有効期限</dt><dd>${escapeHtml(formatDateTime(item.expires_at))}</dd></div>` : ""}</dl>
       <p>${escapeHtml(item.reason_text || "説明なし")}</p>
       ${evidence ? `<details><summary>証拠 ${item.evidence.length}件</summary><ul>${evidence}</ul></details>` : ""}
-      ${(item.approved_alt_user_ids.length || item.reported_alt_user_ids.length) ? `<p><strong>別アカウントID:</strong> ${[...new Set([...item.approved_alt_user_ids, ...item.reported_alt_user_ids])].map(escapeHtml).join(", ")}</p>` : ""}
+      ${manualApprovedAltIds.length ? `<p><strong>管理者承認の別アカウント:</strong> ${manualApprovedAltIds.map(escapeHtml).join(", ")}</p>` : ""}
+      ${item.verified_device_alt_user_ids.length ? `<p><strong>認証端末の確定一致:</strong> ${item.verified_device_alt_user_ids.map(escapeHtml).join(", ")}</p>` : ""}
+      ${item.status === "pending" && item.reported_alt_user_ids.length ? `<p><strong>報告された別アカウント:</strong> ${item.reported_alt_user_ids.map(escapeHtml).join(", ")}</p>` : ""}
       ${item.review_reason ? `<p class="guard-inline-hint">審査理由: ${escapeHtml(item.review_reason)}</p>` : ""}
       ${registry.is_owner ? renderGuardAbuseOwnerCaseActions(item, registry) : ""}
       ${canAppeal ? `<form class="guard-registry-inline-form" data-guard-abuse-appeal-form data-case-id="${escapeAttribute(item.id)}"><textarea name="reason_text" maxlength="2000" required placeholder="判断が誤っている理由と確認できる情報"></textarea><button class="icon-button icon-button--ghost" type="submit" ${registry.saving ? "disabled" : ""}>異議申し立て</button></form>` : ""}
@@ -9750,11 +9787,12 @@ function renderGuardAbuseCaseCard(item, registry) {
 }
 
 function renderGuardAbuseOwnerCaseActions(item, registry) {
+  const verifiedDeviceAltIds = new Set(item.verified_device_alt_user_ids);
   return `
     <div class="guard-registry-review" data-case-id="${escapeAttribute(item.id)}">
       <label class="field"><span>判断理由</span><input data-registry-review-reason="${escapeAttribute(item.id)}" maxlength="1000" placeholder="承認・却下・取消の根拠" /></label>
-      ${item.status === "pending" ? `${item.reported_alt_user_ids.length ? `<fieldset class="field guard-registry-alt-approval"><legend>承認する別アカウント</legend><small>報告されたIDを確認し、関連を承認できるものだけ選択してください。初期状態では選択されません。</small>${item.reported_alt_user_ids.map((id) => `<label class="guard-registry-confirm"><input type="checkbox" value="${escapeAttribute(id)}" data-registry-approved-alt="${escapeAttribute(item.id)}" /> ${escapeHtml(id)}</label>`).join("")}</fieldset>` : ""}<label class="guard-registry-confirm"><input type="checkbox" data-registry-capture-fingerprints="${escapeAttribute(item.id)}" /> 既存の照合情報を承認済み関連情報として保存する</label><label class="field"><span>有効期限（任意）</span><input type="datetime-local" data-registry-expires-at="${escapeAttribute(item.id)}" /></label><div class="feature-card__actions"><button class="icon-button icon-button--primary" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="approve" ${registry.saving ? "disabled" : ""}>承認</button><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="reject" ${registry.saving ? "disabled" : ""}>却下</button></div>` : ""}
-      ${item.status === "approved" ? `<div class="feature-card__actions"><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="revoke" ${registry.saving ? "disabled" : ""}>登録を取り消す</button></div><label class="field"><span>追加する別アカウントID</span><input data-registry-alt-id="${escapeAttribute(item.id)}" inputmode="numeric" placeholder="DiscordユーザーID" /></label><div class="feature-card__actions"><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="add_alt">別アカウントを追加</button></div>${item.approved_alt_user_ids.map((id) => `<button class="guard-moderation-channel-chip" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="remove_alt" data-alt-id="${escapeAttribute(id)}"><span>${escapeHtml(id)}</span>${icon("trash")}</button>`).join("")}` : ""}
+      ${item.status === "pending" ? `${item.reported_alt_user_ids.length ? `<fieldset class="field guard-registry-alt-approval"><legend>承認する別アカウント</legend><small>報告されたIDを確認し、関連を承認できるものだけ選択してください。初期状態では選択されません。</small>${item.reported_alt_user_ids.map((id) => `<label class="guard-registry-confirm"><input type="checkbox" value="${escapeAttribute(id)}" data-registry-approved-alt="${escapeAttribute(item.id)}" /> ${escapeHtml(id)}</label>`).join("")}</fieldset>` : ""}<p class="guard-inline-hint">承認すると、Guard認証で同一ブラウザインスタンスが確定一致したIDも自動で関連付けます。</p><label class="field"><span>有効期限（任意）</span><input type="datetime-local" data-registry-expires-at="${escapeAttribute(item.id)}" /></label><div class="feature-card__actions"><button class="icon-button icon-button--primary" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="approve" ${registry.saving ? "disabled" : ""}>承認</button><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="reject" ${registry.saving ? "disabled" : ""}>却下</button></div>` : ""}
+      ${item.status === "approved" ? `<div class="feature-card__actions"><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="revoke" ${registry.saving ? "disabled" : ""}>登録を取り消す</button></div><label class="field"><span>追加する別アカウントID</span><input data-registry-alt-id="${escapeAttribute(item.id)}" inputmode="numeric" placeholder="DiscordユーザーID" /></label><div class="feature-card__actions"><button class="icon-button icon-button--ghost" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="add_alt">別アカウントを追加</button></div>${item.approved_alt_user_ids.map((id) => `<button class="guard-moderation-channel-chip" type="button" data-action="review-guard-abuse-case" data-case-id="${escapeAttribute(item.id)}" data-review-action="remove_alt" data-alt-id="${escapeAttribute(id)}" title="${verifiedDeviceAltIds.has(id) ? "認証端末の確定一致を解除して除外" : "管理者承認の関連付けを解除"}"><span>${verifiedDeviceAltIds.has(id) ? "認証一致 · " : ""}${escapeHtml(id)}</span>${icon("trash")}</button>`).join("")}` : ""}
     </div>
   `;
 }
@@ -9822,7 +9860,7 @@ async function directRegisterGuardAbuseUser(formElement) {
     source_guild_id: sourceGuild.id,
     subject_user_id: subjectUserId,
     idempotency_key: guardRegistryIdempotencyKey("direct"),
-  }, `${subjectUserId} を直接登録しました。`);
+  }, `${subjectUserId} を直接登録しました。認証端末の確定一致は自動連携されます。`);
   if (saved) {
     formElement.reset();
   }
@@ -9876,12 +9914,11 @@ async function reviewGuardAbuseCase(actionElement) {
   }
   const body = { action, reason };
   if (action === "approve") {
-    const capture = document.querySelector(`[data-registry-capture-fingerprints="${CSS.escape(caseId)}"]`);
     const expires = document.querySelector(`[data-registry-expires-at="${CSS.escape(caseId)}"]`);
     body.alt_user_ids = [...document.querySelectorAll(`[data-registry-approved-alt="${CSS.escape(caseId)}"]:checked`)]
       .map((input) => input instanceof HTMLInputElement ? input.value : "")
       .filter(Boolean);
-    body.capture_existing_fingerprints = capture instanceof HTMLInputElement && capture.checked;
+    body.capture_existing_fingerprints = true;
     if (expires instanceof HTMLInputElement && expires.value) {
       body.expires_at = new Date(expires.value).toISOString();
     }
