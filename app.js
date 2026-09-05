@@ -62,6 +62,7 @@ const AUDIT_ACTION_LABELS = {
   "guild_features.update": "サーバー機能設定の保存",
   "guard.verification.update": "認証設定の保存",
   "guard.invitation.update": "招待リンク設定の保存",
+  "guard.operator_notices.update": "運営からのお知らせ設定の保存",
   "guard.moderation.update": "荒らし対策設定の保存",
   "guard.abuse_registry.submit": "荒らし登録申請",
   "guard.abuse_registry.direct_register": "荒らしユーザー直接登録",
@@ -335,6 +336,15 @@ const SETTINGS_PAGES = [
     view: "features",
   },
   {
+    id: "operator-notices",
+    label: "運営からのお知らせ",
+    description: "Discatからの更新・メンテナンスのお知らせの受信と通知先を設定します。",
+    help: "受信をOFFにすると運営からのお知らせを送信しません。通知先はサーバーのテキストチャンネルから選べます。",
+    icon: "bell",
+    eyebrow: "NOTICE",
+    view: "features",
+  },
+  {
     id: "audit-log",
     label: "変更ログ",
     eyebrow: "履歴",
@@ -421,6 +431,13 @@ const GUARD_FEATURES = [
     description: "参加、BAN、招待、ロール、チャンネル、VC状態、メッセージなどのログ送信先を設定します。",
     help: "イベントごとに有効化とログを送るチャンネルを設定します。",
     icon: "activity",
+  },
+  {
+    id: "operator-notices",
+    label: "運営からのお知らせ",
+    description: "Discatからの更新・メンテナンスのお知らせの受信と通知先を設定します。",
+    help: "受信をOFFにすると運営からのお知らせを送信しません。通知先はサーバーのテキストチャンネルから選べます。",
+    icon: "bell",
   },
   {
     id: "audit-log",
@@ -881,6 +898,7 @@ const state = {
     features: false,
     guardVerification: false,
     guardInvitation: false,
+    guardOperatorNotices: false,
     guardModeration: false,
     guardLogging: false,
     guardRisk: false,
@@ -916,6 +934,7 @@ const state = {
     status: normalizeGuardStatus(null),
     verificationSettings: [],
     invitationSettings: [],
+    operatorNoticesSettings: [],
     moderationSettings: [],
     moderationCatalog: {
       features: [],
@@ -933,13 +952,16 @@ const state = {
     verificationRecords: [],
     verificationSaving: false,
     invitationSaving: false,
+    operatorNoticesSaving: false,
     moderationSaving: false,
     loggingSaving: false,
     riskSaving: false,
     verificationMessage: null,
     invitationMessage: null,
+    operatorNoticesMessage: null,
     verificationError: null,
     invitationError: null,
+    operatorNoticesError: null,
     moderationMessage: null,
     moderationError: null,
     abuseRegistry: {
@@ -966,6 +988,7 @@ const state = {
     adminInviteLinks: {},
     savedVerificationForm: null,
     savedInvitationForm: null,
+    savedOperatorNoticesForm: null,
     savedModerationForm: null,
     savedLoggingForm: null,
     savedRiskForm: null,
@@ -981,6 +1004,7 @@ const state = {
       duplicate_action: "notify",
       restricted_guild_check_enabled: true,
     },
+    operatorNoticesForm: { guild_id: "", enabled: true, channel_id: null },
     invitationForm: {
       guild_id: "",
       enabled: false,
@@ -1776,10 +1800,20 @@ function cookiePath() {
   return slashIndex >= 0 ? path.slice(0, slashIndex + 1) || "/" : "/";
 }
 
-function waitForRetry(delayMs) {
-  return delayMs > 0
-    ? new Promise((resolve) => window.setTimeout(resolve, delayMs))
-    : Promise.resolve();
+function waitForRetry(delayMs, signal) {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  if (delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function requestMethod(init = {}) {
@@ -1791,9 +1825,14 @@ async function fetchWithResilience(url, init = {}, options = {}) {
   const retryDelays = readOnly && options.readRetries !== false ? API_READ_RETRY_DELAYS_MS : [0];
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let lastError = null;
+  let serverDelayMs = 0;
 
   for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
-    await waitForRetry(retryDelays[attempt]);
+    try {
+      await waitForRetry(Math.max(retryDelays[attempt], serverDelayMs), init.signal);
+    } catch {
+      throw new ApiError(0, "リクエストを中止しました。", undefined, "REQUEST_ABORTED");
+    }
     if (!navigator.onLine) {
       throw new ApiError(
         0,
@@ -1816,11 +1855,21 @@ async function fetchWithResilience(url, init = {}, options = {}) {
         ...init,
         signal: controller.signal,
       });
-      if (readOnly && [502, 503, 504].includes(response.status) && attempt < retryDelays.length - 1) {
+      const retryAfter = response.headers.get("retry-after");
+      const seconds = retryAfter === null ? 0 : Number(retryAfter);
+      const retryMs = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - Date.now();
+      serverDelayMs = Number.isFinite(retryMs) ? Math.max(0, retryMs) : 0;
+      if (readOnly && [429, 502, 503, 504].includes(response.status)
+          && serverDelayMs <= timeoutMs && attempt < retryDelays.length - 1) {
+        await response.body?.cancel();
         continue;
       }
-      return response;
+      return await bufferApiResponse(response, controller.signal);
     } catch (error) {
+      if (externalSignal?.aborted) {
+        throw new ApiError(0, "リクエストを中止しました。", undefined, "REQUEST_ABORTED");
+      }
+      if (error instanceof ApiError) throw error;
       lastError = error;
       const timedOut = error instanceof DOMException && error.name === "AbortError";
       if (!timedOut && attempt < retryDelays.length - 1) {
@@ -1842,6 +1891,46 @@ async function fetchWithResilience(url, init = {}, options = {}) {
     undefined,
     timedOut ? "REQUEST_TIMEOUT" : "NETWORK_UNREACHABLE",
   );
+}
+
+async function bufferApiResponse(response, signal) {
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      size += value.byteLength;
+      if (size > 16 * 1024 * 1024) {
+        throw new ApiError(502, "APIの応答サイズが上限を超えました。", undefined, "INVALID_RESPONSE");
+      }
+      chunks.push(value);
+    }
+    return new Response(new Blob(chunks), {
+      status: response.status, statusText: response.statusText, headers: response.headers,
+    });
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+async function readApiJson(response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
+  if (response.ok && payload === null && response.status !== 204) {
+    throw new ApiError(502, "APIから正しい応答を受信できませんでした。", response.headers.get("x-request-id") ?? undefined, "INVALID_RESPONSE");
+  }
+  return payload;
 }
 
 async function request(path, init = {}, options = {}) {
@@ -1867,7 +1956,7 @@ async function request(path, init = {}, options = {}) {
       ...init,
       headers,
       credentials: "omit",
-    }, { timeoutMs });
+    }, { ...options, timeoutMs });
   } catch (error) {
     if (error instanceof ApiError) {
       throw error;
@@ -1879,8 +1968,7 @@ async function request(path, init = {}, options = {}) {
     return undefined;
   }
 
-  const contentType = response.headers.get("content-type") ?? "";
-  const payload = contentType.includes("application/json") ? await response.json().catch(() => null) : null;
+  const payload = await readApiJson(response);
   const requestId = response.headers.get("x-request-id") ?? undefined;
 
   if (!response.ok) {
@@ -1915,6 +2003,16 @@ async function requestPlaylistImportStream(url, onEvent) {
   const controller = new AbortController();
   playlistImportAbortController?.abort();
   playlistImportAbortController = controller;
+  let streamTimedOut = false;
+  let idleTimer;
+  const resetIdleTimer = () => {
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => {
+      streamTimedOut = true;
+      controller.abort();
+    }, 180000);
+  };
+  resetIdleTimer();
 
   try {
     const response = await fetch(API_BASE_URL + "/playlist/tracks/import/stream", {
@@ -1969,10 +2067,14 @@ async function requestPlaylistImportStream(url, onEvent) {
 
     while (true) {
       const { done, value } = await reader.read();
+      resetIdleTimer();
       if (value) {
         buffer += decoder.decode(value, { stream: !done });
         const frames = buffer.split(/\r?\n\r?\n/);
         buffer = frames.pop() ?? "";
+        if (buffer.length > 1024 * 1024) {
+          throw new ApiError(502, "取込の進捗データが大きすぎます。", requestId, "INVALID_RESPONSE");
+        }
         frames.forEach(consumeEvent);
       }
       if (done) {
@@ -1988,6 +2090,9 @@ async function requestPlaylistImportStream(url, onEvent) {
     }
     return result;
   } catch (error) {
+    if (streamTimedOut) {
+      throw new ApiError(0, "プレイリスト取込の応答がタイムアウトしました。", undefined, "REQUEST_TIMEOUT");
+    }
     if (error instanceof ApiError) {
       throw error;
     }
@@ -2001,6 +2106,8 @@ async function requestPlaylistImportStream(url, onEvent) {
       aborted ? "REQUEST_ABORTED" : "NETWORK_UNREACHABLE",
     );
   } finally {
+    window.clearTimeout(idleTimer);
+    controller.abort();
     if (playlistImportAbortController === controller) {
       playlistImportAbortController = null;
     }
@@ -3698,6 +3805,7 @@ function normalizeAutoJoinRule(rule) {
 function normalizeFeatureSettings(featureSettings) {
   return {
     ...featureSettings,
+    operator_notices: normalizeOperatorNoticeSettings(featureSettings?.operator_notices),
     welcome_message: normalizeWelcomeMessageSettings(featureSettings?.welcome_message),
     global_chat_channel_id: normalizeNullableString(featureSettings?.global_chat_channel_id) ?? "",
     sticky_messages: Array.isArray(featureSettings?.sticky_messages)
@@ -3966,6 +4074,7 @@ function resetDirtyViews() {
     features: false,
     guardVerification: false,
     guardInvitation: false,
+    guardOperatorNotices: false,
     guardModeration: false,
     guardLogging: false,
     guardRisk: false,
@@ -4016,6 +4125,7 @@ function comparableFeatureSettings(featureSettings) {
   const ticket = comparableTicketSettings(featureSettings.ticket);
   const rolePanel = comparableRolePanelSettings(featureSettings.role_panel);
   return {
+    operator_notices: normalizeOperatorNoticeSettings(featureSettings.operator_notices),
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
     global_chat_channel_id: normalizeNullableString(featureSettings.global_chat_channel_id),
     sticky_messages: (featureSettings.sticky_messages ?? []).map((rule) => ({
@@ -4174,6 +4284,16 @@ function guardInvitationFormFromSettings(guildId) {
   });
 }
 
+function guardOperatorNoticesFormFromSettings(guildId) {
+  const resolvedGuildId = String(guildId ?? "");
+  const settings = state.guard.operatorNoticesSettings.find((item) => item.guild_id === resolvedGuildId);
+  return normalizeGuardOperatorNoticesForm({
+    guild_id: resolvedGuildId,
+    enabled: settings?.enabled ?? true,
+    channel_id: settings?.channel_id ?? null,
+  });
+}
+
 function guardModerationFormFromSettings(guildId) {
   const resolvedGuildId = String(guildId ?? "");
   const settings = state.guard.moderationSettings.find((item) => item.guild_id === resolvedGuildId);
@@ -4224,6 +4344,13 @@ function rememberSavedGuardInvitationForm(form) {
   state.dirtyViews.guardInvitation = false;
 }
 
+function rememberSavedGuardOperatorNoticesForm(form) {
+  const normalized = normalizeGuardOperatorNoticesForm(form);
+  state.guard.operatorNoticesForm = cloneState(normalized);
+  state.guard.savedOperatorNoticesForm = cloneState(normalized);
+  state.dirtyViews.guardOperatorNotices = false;
+}
+
 function rememberSavedGuardRiskForm(form) {
   const normalized = normalizeGuardRiskForm(form);
   state.guard.riskForm = cloneState(normalized);
@@ -4259,6 +4386,13 @@ function comparableGuardInvitationForm(form) {
   return normalizeGuardInvitationForm(form);
 }
 
+function comparableGuardOperatorNoticesForm(form) {
+  if (!form) {
+    return null;
+  }
+  return normalizeGuardOperatorNoticesForm(form);
+}
+
 function comparableGuardRiskForm(form) {
   if (!form) {
     return null;
@@ -4275,6 +4409,10 @@ function updateDirtyState(view) {
     state.dirtyViews.guardInvitation =
       JSON.stringify(comparableGuardInvitationForm(state.guard.invitationForm)) !==
       JSON.stringify(comparableGuardInvitationForm(state.guard.savedInvitationForm));
+  } else if (view === "guardOperatorNotices") {
+    state.dirtyViews.guardOperatorNotices =
+      JSON.stringify(comparableGuardOperatorNoticesForm(state.guard.operatorNoticesForm)) !==
+      JSON.stringify(comparableGuardOperatorNoticesForm(state.guard.savedOperatorNoticesForm));
   } else if (view === "guardModeration") {
     state.dirtyViews.guardModeration =
       JSON.stringify(comparableGuardModerationForm(state.guard.moderationForm)) !==
@@ -4321,6 +4459,9 @@ function activeGuardDirtyView() {
   }
   if (featureId === "invitation") {
     return "guardInvitation";
+  }
+  if (featureId === "operator-notices") {
+    return "guardOperatorNotices";
   }
   if (featureId === "logging") {
     return "guardLogging";
@@ -4571,6 +4712,9 @@ async function publishRolePanel() {
 
 function buildFeatureSettingsPatch() {
   const pageId = activeSettingsPage().id;
+  if (pageId === "operator-notices") {
+    return { operator_notices: normalizeOperatorNoticeSettings(state.featureSettings.operator_notices) };
+  }
   if (pageId === "welcome-message") {
     return {
       welcome_message: buildWelcomeMessagePatch(state.featureSettings.welcome_message),
@@ -5030,6 +5174,7 @@ function resetGuardAuthenticatedState() {
   state.guard.moderationCatalog = normalizeGuardModerationCatalog(null);
   state.guard.loggingSettings = [];
   state.guard.invitationSettings = [];
+  state.guard.operatorNoticesSettings = [];
   state.guard.riskSettings = [];
   state.guard.riskActions = GUARD_RISK_ACTIONS.filter((action) => ["none", "log"].includes(action.id));
   state.guard.riskMemberActionsEnabled = false;
@@ -5038,13 +5183,16 @@ function resetGuardAuthenticatedState() {
   state.guard.verificationRecords = [];
   state.guard.verificationSaving = false;
   state.guard.invitationSaving = false;
+  state.guard.operatorNoticesSaving = false;
   state.guard.moderationSaving = false;
   state.guard.loggingSaving = false;
   state.guard.riskSaving = false;
   state.guard.verificationMessage = null;
   state.guard.invitationMessage = null;
+  state.guard.operatorNoticesMessage = null;
   state.guard.verificationError = null;
   state.guard.invitationError = null;
+  state.guard.operatorNoticesError = null;
   state.guard.moderationMessage = null;
   state.guard.moderationError = null;
   state.guard.abuseRegistry = {
@@ -5071,6 +5219,7 @@ function resetGuardAuthenticatedState() {
   state.guard.adminInviteLinks = {};
   state.guard.savedVerificationForm = null;
   state.guard.savedInvitationForm = null;
+  state.guard.savedOperatorNoticesForm = null;
   state.guard.savedModerationForm = null;
   state.guard.savedLoggingForm = null;
   state.guard.savedRiskForm = null;
@@ -5087,6 +5236,7 @@ function resetGuardAuthenticatedState() {
     restricted_guild_check_enabled: true,
   };
   state.guard.invitationForm = { guild_id: "", enabled: false, dm_warning_enabled: true };
+  state.guard.operatorNoticesForm = { guild_id: "", enabled: true, channel_id: null };
   state.guard.moderationForm = { guild_id: "", features: {} };
   state.guard.loggingForm = { guild_id: "", events: {} };
   state.guard.riskForm = {
@@ -5101,6 +5251,7 @@ function resetGuardAuthenticatedState() {
   };
   state.dirtyViews.guardVerification = false;
   state.dirtyViews.guardInvitation = false;
+  state.dirtyViews.guardOperatorNotices = false;
   state.dirtyViews.guardModeration = false;
   state.dirtyViews.guardLogging = false;
   state.dirtyViews.guardRisk = false;
@@ -6371,11 +6522,12 @@ async function performGuardDataLoad(options = {}) {
 
   if (state.guard.apiBase) {
     try {
-      const [healthResult, statusResult, settingsResult, invitationResult, moderationResult, loggingResult, riskResult, optionsResult] = await Promise.allSettled([
+      const [healthResult, statusResult, settingsResult, invitationResult, operatorNoticesResult, moderationResult, loggingResult, riskResult, optionsResult] = await Promise.allSettled([
         guardFetchJson(guardApiUrl("/health")),
         guardFetchJson(guardApiUrl("/status")),
         guardFetchJson(guardApiUrl("/verification/settings")),
         guardFetchJson(guardApiUrl("/invitation/settings")),
+        guardFetchJson(guardApiUrl("/operator-notices/settings")),
         guardFetchJson(guardApiUrl("/moderation/settings")),
         guardFetchJson(guardApiUrl("/logging/settings")),
         guardFetchJson(guardApiUrl("/risk/settings")),
@@ -6388,7 +6540,7 @@ async function performGuardDataLoad(options = {}) {
         throw statusResult.reason;
       }
       if (!hadLoadedApiSettings) {
-        const requiredSettingsFailure = [settingsResult, invitationResult, moderationResult, loggingResult, riskResult]
+        const requiredSettingsFailure = [settingsResult, invitationResult, operatorNoticesResult, moderationResult, loggingResult, riskResult]
           .find((result) => result.status === "rejected");
         if (requiredSettingsFailure?.status === "rejected") {
           throw requiredSettingsFailure.reason;
@@ -6413,6 +6565,9 @@ async function performGuardDataLoad(options = {}) {
       }
       if (invitationResult.status === "fulfilled") {
         state.guard.invitationSettings = normalizeGuardInvitationSettings(invitationResult.value?.settings);
+      }
+      if (operatorNoticesResult.status === "fulfilled") {
+        state.guard.operatorNoticesSettings = normalizeGuardOperatorNoticesSettings(operatorNoticesResult.value?.settings);
       }
       if (moderationResult.status === "fulfilled") {
         state.guard.moderationCatalog = normalizeGuardModerationCatalog(moderationResult.value);
@@ -6443,6 +6598,7 @@ async function performGuardDataLoad(options = {}) {
       }
       hydrateGuardVerificationForm();
       hydrateGuardInvitationForm();
+      hydrateGuardOperatorNoticesForm();
       hydrateGuardModerationForm();
       hydrateGuardLoggingForm();
       hydrateGuardRiskForm();
@@ -6498,6 +6654,7 @@ async function performGuardDataLoad(options = {}) {
   }
   state.guard.verificationSettings = [];
   state.guard.invitationSettings = [];
+  state.guard.operatorNoticesSettings = [];
   state.guard.moderationSettings = [];
   state.guard.moderationCatalog = normalizeGuardModerationCatalog(null);
   state.guard.loggingSettings = [];
@@ -6508,6 +6665,7 @@ async function performGuardDataLoad(options = {}) {
   state.guard.verificationRecords = [];
   hydrateGuardVerificationForm();
   hydrateGuardInvitationForm();
+  hydrateGuardOperatorNoticesForm();
   hydrateGuardModerationForm();
   hydrateGuardLoggingForm();
   hydrateGuardRiskForm();
@@ -6767,7 +6925,7 @@ async function guardFetchJson(url, options = {}, behavior = {}) {
     throw new ApiError(0, guardConnectionErrorMessage(url, error), undefined, "GUARD_UNREACHABLE");
   }
   if (!response.ok) {
-    const payload = await response.json().catch(() => null);
+    const payload = await readApiJson(response);
     const detail = isObject(payload) ? (payload.message ?? payload.error) : "";
     const error = new ApiError(
       response.status,
@@ -6785,7 +6943,7 @@ async function guardFetchJson(url, options = {}, behavior = {}) {
   if (response.status === 204) {
     return undefined;
   }
-  const payload = await response.json().catch(() => null);
+  const payload = await readApiJson(response);
   const authenticatedMutation = Boolean(
     !behavior.operationPoll &&
       sentCurrentAuthToken &&
@@ -7597,12 +7755,27 @@ function normalizeGuardInvitationForm(form) {
   };
 }
 
+function normalizeGuardOperatorNoticesForm(form) {
+  return { guild_id: String(form?.guild_id ?? ""), ...normalizeOperatorNoticeSettings(form) };
+}
+
 function normalizeGuardInvitationSettings(settings) {
   if (!Array.isArray(settings)) {
     return [];
   }
   return settings.map((item) => ({
     ...normalizeGuardInvitationForm(item),
+    updated_at: item?.updated_at ?? null,
+    updated_by: item?.updated_by ?? null,
+  })).filter((item) => item.guild_id);
+}
+
+function normalizeGuardOperatorNoticesSettings(settings) {
+  if (!Array.isArray(settings)) {
+    return [];
+  }
+  return settings.map((item) => ({
+    ...normalizeGuardOperatorNoticesForm(item),
     updated_at: item?.updated_at ?? null,
     updated_by: item?.updated_by ?? null,
   })).filter((item) => item.guild_id);
@@ -7728,6 +7901,13 @@ function normalizeGuardModerationCatalog(payload) {
     rules: isObject(payload?.rules) ? payload.rules : {},
     member_actions_enabled: payload?.member_actions_enabled === true,
   };
+}
+
+function guardModerationActionsForFeature(featureId) {
+  if (featureId === "mention_spam") {
+    return GUARD_MODERATION_ACTIONS;
+  }
+  return state.guard.moderationCatalog.actions;
 }
 
 function guardModerationFeatureDefinitions() {
@@ -7858,6 +8038,26 @@ function hydrateGuardInvitationForm() {
   updateDirtyState("guardInvitation");
 }
 
+function hydrateGuardOperatorNoticesForm() {
+  const form = state.guard.operatorNoticesForm;
+  const guilds = guardConfigurableGuilds();
+  const guildIds = new Set(guilds.map((guild) => guild.id));
+  const fallbackGuildId = guilds[0]?.id ?? "";
+  const guildId = [
+    form.guild_id,
+    state.guard.operatorNoticesSettings[0]?.guild_id,
+    state.guard.verificationForm.guild_id,
+    state.guard.status.guilds?.[0]?.id,
+  ].find((id) => id && guildIds.has(id)) ?? fallbackGuildId;
+  const savedForm = guardOperatorNoticesFormFromSettings(guildId);
+  const preserveDirtyForm = isViewDirty("guardOperatorNotices") && form.guild_id === guildId;
+  state.guard.savedOperatorNoticesForm = cloneState(savedForm);
+  if (!preserveDirtyForm) {
+    state.guard.operatorNoticesForm = cloneState(savedForm);
+  }
+  updateDirtyState("guardOperatorNotices");
+}
+
 function hydrateGuardModerationForm() {
   const form = state.guard.moderationForm;
   const guilds = guardConfigurableGuilds();
@@ -7928,6 +8128,10 @@ function applyGuardInvitationSettingsForGuild(guildId) {
   rememberSavedGuardInvitationForm(guardInvitationFormFromSettings(guildId));
 }
 
+function applyGuardOperatorNoticesSettingsForGuild(guildId) {
+  rememberSavedGuardOperatorNoticesForm(guardOperatorNoticesFormFromSettings(guildId));
+}
+
 function applyGuardModerationSettingsForGuild(guildId) {
   rememberSavedGuardModerationForm(guardModerationFormFromSettings(guildId));
 }
@@ -7955,6 +8159,7 @@ function applyGuardSettingsForGuild(guildId) {
   state.guard.auditGuildId = String(guildId ?? "");
   applyGuardVerificationSettingsForGuild(guildId);
   applyGuardInvitationSettingsForGuild(guildId);
+  applyGuardOperatorNoticesSettingsForGuild(guildId);
   applyGuardModerationSettingsForGuild(guildId);
   applyGuardLoggingSettingsForGuild(guildId);
   applyGuardRiskSettingsForGuild(guildId);
@@ -8028,6 +8233,9 @@ function renderGuardFeatureContent(feature) {
   }
   if (feature?.id === "invitation") {
     return renderGuardInvitation();
+  }
+  if (feature?.id === "operator-notices") {
+    return renderGuardOperatorNotices();
   }
   if (feature?.id === "moderation") {
     return renderGuardModeration();
@@ -8461,7 +8669,7 @@ function renderGuardModeration() {
       <div class="status-banner guard-privacy-note">
         ${icon("shield")}<span>はじめて設定する場合は、必要な検知を有効にして「ゆるめ」から試し、処罰内容を確認して保存してください。検知条件が書かれたカード自体を押すとペースを選べます。</span>
       </div>
-      ${state.guard.moderationCatalog.member_actions_enabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、メッセージ内容や投稿回数からの自動キック／BANは無効です。検知時の処理はログまたはメッセージ削除までに制限されます。</span></div>`}
+      ${state.guard.moderationCatalog.member_actions_enabled ? "" : `<div class="status-banner guard-privacy-note">${icon("lock")}<span>安全設定により、連投メンション以外の自動キック／BANは無効です。連投メンション検知は、この画面で選択した処罰を実行します。</span></div>`}
       ${state.guard.moderationError ? `<p class="status-banner status-banner--error">${icon("alert")}<span>${escapeHtml(state.guard.moderationError)}</span></p>` : ""}
       ${state.guard.moderationMessage ? `<p class="status-banner status-banner--success">${icon("success")}<span>${escapeHtml(state.guard.moderationMessage)}</span></p>` : ""}
       <form class="guard-moderation-form" data-guard-moderation-form>
@@ -8541,7 +8749,7 @@ function renderGuardModerationFeatureCard(feature, settings, guild) {
         <label class="field">
           <span>処罰内容</span>
           <select data-guard-moderation-feature="${escapeAttribute(feature.id)}" data-guard-moderation-field="action">
-            ${state.guard.moderationCatalog.actions.map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
+            ${guardModerationActionsForFeature(feature.id).map((action) => `<option value="${escapeAttribute(action.id)}" ${action.id === normalized.action ? "selected" : ""}>${escapeHtml(action.label)}</option>`).join("")}
           </select>
         </label>
         ${isPaceFeature
@@ -8981,6 +9189,10 @@ function guardInvitationSelectedGuild() {
   return guardConfigurableGuilds().find((guild) => guild.id === state.guard.invitationForm.guild_id) ?? null;
 }
 
+function guardOperatorNoticesSelectedGuild() {
+  return guardConfigurableGuilds().find((guild) => guild.id === state.guard.operatorNoticesForm.guild_id) ?? null;
+}
+
 function guardModerationSelectedGuild() {
   return guardConfigurableGuilds().find((guild) => guild.id === state.guard.moderationForm.guild_id) ?? null;
 }
@@ -9003,6 +9215,9 @@ function activeGuardSelectedGuild() {
   }
   if (featureId === "invitation") {
     return guardInvitationSelectedGuild();
+  }
+  if (featureId === "operator-notices") {
+    return guardOperatorNoticesSelectedGuild();
   }
   if (featureId === "moderation") {
     return guardModerationSelectedGuild();
@@ -9252,6 +9467,23 @@ function updateGuardInvitationField(target, options = { renderAfter: true }) {
   }
 }
 
+function updateGuardOperatorNoticesField(target, options = { renderAfter: true }) {
+  if (state.guard.operatorNoticesSaving) return;
+  const field = target.dataset.guardOperatorNoticesField;
+  if (!field || !["enabled", "channel_id"].includes(field)) {
+    return;
+  }
+  const form = normalizeGuardOperatorNoticesForm(state.guard.operatorNoticesForm);
+  form[field] = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
+  state.guard.operatorNoticesForm = normalizeGuardOperatorNoticesForm(form);
+  state.guard.operatorNoticesError = null;
+  state.guard.operatorNoticesMessage = null;
+  updateDirtyState("guardOperatorNotices");
+  if (options.renderAfter) {
+    render();
+  }
+}
+
 async function saveGuardInvitationSettings() {
   if (!state.guard.apiBase) {
     state.guard.invitationError = "Guard APIに接続できません。";
@@ -9303,6 +9535,65 @@ async function saveGuardInvitationSettings() {
   } finally {
     if (guardSessionIsCurrent(guardSession)) {
       state.guard.invitationSaving = false;
+      render();
+    }
+  }
+  return saved;
+}
+
+async function saveGuardOperatorNoticesSettings() {
+  if (state.guard.operatorNoticesSaving) return false;
+  if (!state.guard.apiBase || !state.guard.hasLoadedApiSettings) {
+    state.guard.operatorNoticesError = "Guard APIに接続できません。";
+    render();
+    return false;
+  }
+  const guardSession = captureGuardSessionIdentity();
+  if (!guardSession) {
+    state.guard.operatorNoticesError = "ログインが必要です。";
+    render();
+    return false;
+  }
+  const form = normalizeGuardOperatorNoticesForm(state.guard.operatorNoticesForm);
+  if (!form.guild_id) {
+    state.guard.operatorNoticesError = "サーバーを選択してください。";
+    render();
+    return false;
+  }
+
+  state.guard.operatorNoticesSaving = true;
+  state.guard.operatorNoticesError = null;
+  state.guard.operatorNoticesMessage = null;
+  render();
+
+  let saved = false;
+  try {
+    const payload = await guardFetchJson(guardApiUrl("/operator-notices/settings"), {
+      method: "POST",
+      body: JSON.stringify({ settings: form }),
+    });
+    if (!guardSessionIsCurrent(guardSession)) {
+      return false;
+    }
+    state.guard.mutationGeneration += 1;
+    const nextSettings = normalizeGuardOperatorNoticesSettings([payload?.settings]);
+    state.guard.operatorNoticesSettings = [
+      ...state.guard.operatorNoticesSettings.filter((item) => item.guild_id !== form.guild_id),
+      ...nextSettings,
+    ];
+    if (state.guard.operatorNoticesForm.guild_id !== form.guild_id) return false;
+    rememberSavedGuardOperatorNoticesForm(nextSettings[0] ?? form);
+    invalidateAuditLogs("guard", form.guild_id);
+    clearPendingNavigation();
+    state.guard.operatorNoticesMessage = "運営からのお知らせ設定を保存しました。";
+    saved = guardSessionIsCurrent(guardSession);
+  } catch (error) {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.operatorNoticesError = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    if (guardSessionIsCurrent(guardSession)) {
+      state.guard.operatorNoticesSaving = false;
       render();
     }
   }
@@ -10513,6 +10804,7 @@ function auditActionLabel(action) {
     guard: "Guard",
     verification: "認証",
     invitation: "招待リンク",
+    "operator-notices": "運営からのお知らせ",
     moderation: "荒らし対策",
     logging: "ログ機能",
     risk: "危険度判断",
@@ -11792,6 +12084,7 @@ function renderFeatureSettingsForm() {
   const dirty = isViewDirty("features");
   const page = activeSettingsPage();
   const content = {
+    "operator-notices": () => renderOperatorNoticeFields(state.featureSettings.operator_notices, textChannels, "one"),
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
@@ -13424,6 +13717,7 @@ function collectStatusToasts() {
     const noticeByFeature = {
       verification: [state.guard.verificationError, state.guard.verificationMessage, state.guard.verificationSaving, "認証設定"],
       invitation: [state.guard.invitationError, state.guard.invitationMessage, state.guard.invitationSaving, "招待リンク設定"],
+      "operator-notices": [state.guard.operatorNoticesError, state.guard.operatorNoticesMessage, state.guard.operatorNoticesSaving, "運営からのお知らせ設定"],
       moderation: [state.guard.moderationError, state.guard.moderationMessage, state.guard.moderationSaving, "荒らし対策設定"],
       logging: [state.guard.loggingError, state.guard.loggingMessage, state.guard.loggingSaving, "ログ設定"],
       risk: [state.guard.riskError, state.guard.riskMessage, state.guard.riskSaving, "危険度設定"],
@@ -13477,7 +13771,7 @@ function renderUnsavedChangesPrompt() {
   if (!hasPendingNavigation() || !hasUnsavedChanges()) {
     return "";
   }
-  const saving = state.saving || state.guard.verificationSaving || state.guard.invitationSaving || state.guard.moderationSaving || state.guard.loggingSaving || state.guard.riskSaving;
+  const saving = state.saving || state.guard.verificationSaving || state.guard.invitationSaving || state.guard.operatorNoticesSaving || state.guard.moderationSaving || state.guard.loggingSaving || state.guard.riskSaving;
   return `
     <div class="unsaved-bar" role="alert" aria-live="assertive">
       <div class="unsaved-bar__message">
@@ -13700,6 +13994,9 @@ async function saveActiveSettings() {
     if (featureId === "invitation") {
       return saveGuardInvitationSettings();
     }
+    if (featureId === "operator-notices") {
+      return saveGuardOperatorNoticesSettings();
+    }
     if (featureId === "moderation") {
       return saveGuardModerationSettings();
     }
@@ -13730,6 +14027,9 @@ function discardActiveSettings() {
     if (activeGuardFeature().id === "invitation") {
       state.guard.invitationForm = cloneState(state.guard.savedInvitationForm) ?? normalizeGuardInvitationForm(null);
       state.dirtyViews.guardInvitation = false;
+    } else if (activeGuardFeature().id === "operator-notices") {
+      state.guard.operatorNoticesForm = cloneState(state.guard.savedOperatorNoticesForm) ?? normalizeGuardOperatorNoticesForm(null);
+      state.dirtyViews.guardOperatorNotices = false;
     } else if (activeGuardFeature().id === "moderation") {
       state.guard.moderationForm = cloneState(state.guard.savedModerationForm) ?? normalizeGuardModerationForm(null);
       state.dirtyViews.guardModeration = false;
@@ -13774,6 +14074,9 @@ function handleSubmit(event) {
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-invitation-form]")) {
     event.preventDefault();
     void saveGuardInvitationSettings();
+  } else if (target instanceof HTMLFormElement && target.matches("[data-guard-operator-notices-form]")) {
+    event.preventDefault();
+    void saveGuardOperatorNoticesSettings();
   } else if (target instanceof HTMLFormElement && target.matches("[data-guard-moderation-form]")) {
     event.preventDefault();
     void saveGuardModerationSettings();
@@ -13907,6 +14210,8 @@ function handleClick(event) {
       void saveGuardVerificationSettings();
     } else if (action === "save-guard-invitation-settings") {
       void saveGuardInvitationSettings();
+    } else if (action === "save-guard-operator-notices-settings") {
+      void saveGuardOperatorNoticesSettings();
     } else if (action === "save-guard-moderation-settings") {
       void saveGuardModerationSettings();
     } else if (action === "refresh-guard-abuse-registry") {
@@ -14198,8 +14503,20 @@ function handleChange(event) {
 
   if (target.dataset.guardVerificationField) {
     updateGuardVerificationField(target, { renderAfter: true });
+  } else if (target.dataset.operatorNoticeField) {
+    const field = target.dataset.operatorNoticeField;
+    if (!["enabled", "channel_id"].includes(field) || !state.featureSettings || state.saving) return;
+    state.featureSettings.operator_notices = normalizeOperatorNoticeSettings({
+      ...state.featureSettings.operator_notices,
+      [field]: field === "enabled" ? target.checked : target.value,
+    });
+    state.message = null;
+    updateDirtyState("features");
+    render();
   } else if (target.dataset.guardInvitationField) {
     updateGuardInvitationField(target, { renderAfter: true });
+  } else if (target.dataset.guardOperatorNoticesField) {
+    updateGuardOperatorNoticesField(target, { renderAfter: true });
   } else if (target.dataset.guardModerationGlobalField) {
     updateGuardModerationGlobalField(target, { renderAfter: true });
   } else if (target.dataset.guardModerationField) {
@@ -14967,5 +15284,67 @@ function icon(name, label = "") {
     <svg class="svg-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${label ? `aria-label="${escapeAttribute(label)}"` : 'aria-hidden="true"'}>
       ${paths[name] ?? paths.settings}
     </svg>
+  `;
+}
+
+
+function normalizeOperatorNoticeSettings(settings) {
+  return { enabled: settings?.enabled !== false, channel_id: normalizeNullableString(settings?.channel_id) };
+}
+
+function renderOperatorNoticeFields(value, textChannels, product, disabled = false) {
+  const settings = normalizeOperatorNoticeSettings(value);
+  const field = product === "guard" ? "data-guard-operator-notices-field" : "data-operator-notice-field";
+  const busy = disabled || (product === "guard" ? state.guard.operatorNoticesSaving : state.saving);
+  const missingChannel = settings.channel_id && !textChannels.some((item) => item.id === settings.channel_id);
+  return `
+    <section class="feature-card" aria-label="運営からのお知らせ">
+      <div class="feature-card__header">
+        <div class="panel-heading">${icon("bell")}<h2>Discatからの更新・メンテナンス通知</h2></div>
+        <span class="feature-status ${settings.enabled ? "feature-status--on" : ""}">${settings.enabled ? "受信ON" : "受信OFF"}</span>
+      </div>
+      <div class="settings-grid">
+        <label class="toggle-row guard-verification-toggle">
+          <input type="checkbox" ${field}="enabled" ${settings.enabled ? "checked" : ""} ${busy ? "disabled" : ""} />
+          <span><strong>運営からのお知らせを受信する</strong><small>OFFにすると、このサーバーへの更新・メンテナンスのお知らせを停止します。</small></span>
+        </label>
+        <label class="field">
+          <span>通知先チャンネル</span>
+          <select ${renderPersistentOptionListAttributes(textChannels)} ${field}="channel_id" ${busy || !settings.enabled ? "disabled" : ""}>
+            <option value="" ${!settings.channel_id ? "selected" : ""}>自動選択（従来の動作）</option>
+            ${missingChannel ? `<option value="${escapeAttribute(settings.channel_id)}" selected>現在の設定（一覧にありません）: ${escapeHtml(settings.channel_id)}</option>` : ""}
+            ${textChannels.map((channel) => `<option value="${escapeAttribute(channel.id)}" ${channel.id === settings.channel_id ? "selected" : ""}>#${escapeHtml(channel.name)}</option>`).join("")}
+          </select>
+          <small>指定先を削除した場合やBotに閲覧・送信・埋め込みの権限がない場合、お知らせは送信されません。</small>
+        </label>
+      </div>
+      <p class="guard-inline-hint">変更後は「変更を保存」を押してください。保存した内容は次回のお知らせから適用されます。</p>
+    </section>
+  `;
+}
+
+function renderGuardOperatorNotices() {
+  const guild = guardOperatorNoticesSelectedGuild();
+  const channels = state.guard.verificationOptions?.guilds?.find((item) => item.id === guild?.id)?.text_channels ?? [];
+  const dirty = isViewDirty("guardOperatorNotices");
+  const unavailable = !guild || !state.guard.hasLoadedApiSettings || state.guard.source !== "api";
+  return `
+    ${renderGuardApiNotice()}
+    <section class="settings-panel" aria-label="運営からのお知らせ設定">
+      <div class="settings-panel__header">
+        <div class="panel-heading">${icon("bell")}<h2>運営からのお知らせ設定</h2></div>
+        <div class="settings-panel__header-actions">
+          <button class="icon-button icon-button--primary save-button ${dirty ? "save-button--dirty" : ""}" type="button" data-action="save-guard-operator-notices-settings" data-save-view="guardOperatorNotices" ${unavailable || state.guard.operatorNoticesSaving ? "disabled" : ""}>
+            ${icon("save")}<span>${state.guard.operatorNoticesSaving ? "保存中" : "変更を保存"}</span>
+          </button>
+        </div>
+      </div>
+      <p class="guard-inline-hint">対象サーバー: <strong>${escapeHtml(guild?.name ?? "未選択")}</strong></p>
+      ${state.guard.operatorNoticesError ? `<p class="status-banner status-banner--error">${escapeHtml(state.guard.operatorNoticesError)}</p>` : ""}
+      ${state.guard.operatorNoticesMessage ? `<p class="status-banner status-banner--success">${escapeHtml(state.guard.operatorNoticesMessage)}</p>` : ""}
+      <form class="feature-settings" data-guard-operator-notices-form>
+        ${renderOperatorNoticeFields(state.guard.operatorNoticesForm, channels, "guard", unavailable)}
+      </form>
+    </section>
   `;
 }
