@@ -117,6 +117,7 @@ const AUDIT_FIELD_LABELS = {
   user_dictionary: "ユーザー辞書",
   auto_join_rules: "自動読み上げルール",
   welcome_message: "歓迎メッセージ",
+  leave_message: "退出メッセージ",
   message: "メッセージ",
   global_chat_channel_id: "グローバルチャット",
   sticky_messages: "固定メッセージ",
@@ -251,6 +252,15 @@ const SETTINGS_PAGES = [
     eyebrow: "参加",
     description: "新規メンバーへの案内",
     help: "メンバー参加時に、指定チャンネルへ歓迎メッセージを送信します。",
+    icon: "message",
+    view: "features",
+  },
+  {
+    id: "leave-message",
+    label: "退出メッセージ",
+    eyebrow: "退出",
+    description: "退出時のメッセージ",
+    help: "メンバー退出時に、指定チャンネルへメッセージを送信します。",
     icon: "message",
     view: "features",
   },
@@ -3807,6 +3817,7 @@ function normalizeFeatureSettings(featureSettings) {
     ...featureSettings,
     operator_notices: normalizeOperatorNoticeSettings(featureSettings?.operator_notices),
     welcome_message: normalizeWelcomeMessageSettings(featureSettings?.welcome_message),
+    leave_message: normalizeWelcomeMessageSettings(featureSettings?.leave_message),
     global_chat_channel_id: normalizeNullableString(featureSettings?.global_chat_channel_id) ?? "",
     sticky_messages: Array.isArray(featureSettings?.sticky_messages)
       ? featureSettings.sticky_messages
@@ -4127,6 +4138,7 @@ function comparableFeatureSettings(featureSettings) {
   return {
     operator_notices: normalizeOperatorNoticeSettings(featureSettings.operator_notices),
     welcome_message: comparableWelcomeMessageSettings(featureSettings.welcome_message),
+    leave_message: comparableWelcomeMessageSettings(featureSettings.leave_message),
     global_chat_channel_id: normalizeNullableString(featureSettings.global_chat_channel_id),
     sticky_messages: (featureSettings.sticky_messages ?? []).map((rule) => ({
       channel_id: rule.channel_id,
@@ -4719,6 +4731,9 @@ function buildFeatureSettingsPatch() {
     return {
       welcome_message: buildWelcomeMessagePatch(state.featureSettings.welcome_message),
     };
+  }
+  if (pageId === "leave-message") {
+    return { leave_message: buildWelcomeMessagePatch(state.featureSettings.leave_message) };
   }
   if (pageId === "global-chat") {
     return {
@@ -12086,6 +12101,7 @@ function renderFeatureSettingsForm() {
   const content = {
     "operator-notices": () => renderOperatorNoticeFields(state.featureSettings.operator_notices, textChannels, "one"),
     "welcome-message": () => renderWelcomeMessageSettings(textChannels),
+    "leave-message": () => renderWelcomeMessageSettings(textChannels, true),
     "sticky-message": () => renderStickyMessageSettings(textChannels),
     "vc-notification": () => renderVcNotificationSettings(textChannels, roles),
     "temporary-vc": () => renderTemporaryVoiceSettings(voiceChannels, categories),
@@ -12105,15 +12121,17 @@ function renderFeatureSettingsForm() {
   `;
 }
 
-function renderWelcomeMessageSettings(textChannels) {
-  const settings = normalizeWelcomeMessageSettings(state.featureSettings.welcome_message);
+function renderWelcomeMessageSettings(textChannels, isLeave = false) {
+  const settings = normalizeWelcomeMessageSettings(state.featureSettings[isLeave ? "leave_message" : "welcome_message"]);
+  const title = isLeave ? "退出メッセージ" : "歓迎メッセージ";
+  const messageLabel = isLeave ? "退出メッセージ" : "ようこそメッセージ";
   const selectedChannel = textChannels.find((channel) => channel.id === settings.channel_id);
   const enabled = Boolean(settings.enabled && settings.channel_id && settings.message);
   return `
-    <section class="feature-card" aria-label="歓迎メッセージ" data-welcome-message-card>
+    <section class="feature-card" aria-label="${title}" data-welcome-message-card>
       <div class="feature-card__header">
         <div class="panel-heading">
-          ${icon("message")}<h2>歓迎メッセージ</h2>
+          ${icon("message")}<h2>${title}</h2>
         </div>
         <span class="feature-status ${enabled ? "feature-status--on" : ""}" data-welcome-message-status>
           ${enabled ? "有効" : "未設定"}
@@ -12132,9 +12150,9 @@ function renderWelcomeMessageSettings(textChannels) {
           </select>
         </label>
         <div class="field welcome-message-text">
-          <span>ようこそメッセージ</span>
-          ${renderWelcomeTokenGuide()}
-          <textarea maxlength="1900" rows="5" data-welcome-message-field="message" aria-label="ようこそメッセージ" placeholder="ようこそ [user]！">${escapeHtml(settings.message)}</textarea>
+          <span>${messageLabel}</span>
+          ${renderWelcomeTokenGuide(isLeave)}
+          <textarea maxlength="1900" rows="5" data-welcome-message-field="message" aria-label="${messageLabel}" placeholder="${isLeave ? "[userName] さんが退出しました。" : "ようこそ [user]！"}">${escapeHtml(settings.message)}</textarea>
         </div>
         <div class="field feature-summary">
           <span>現在の設定</span>
@@ -12145,19 +12163,19 @@ function renderWelcomeMessageSettings(textChannels) {
   `;
 }
 
-function renderWelcomeTokenGuide() {
+function renderWelcomeTokenGuide(isLeave = false) {
   return `
     <div class="welcome-token-guide" aria-label="利用可能コマンド">
       <span class="welcome-token-guide__title">利用可能コマンド:</span>
       <div class="welcome-token-groups">
-        ${WELCOME_MESSAGE_TOKEN_GROUPS.map((group) => `
+        ${WELCOME_MESSAGE_TOKEN_GROUPS.filter((group) => !isLeave || group.title !== "招待").map((group) => `
           <section class="welcome-token-group" aria-label="${escapeAttribute(group.title)}">
             <span class="welcome-token-group__title">${escapeHtml(group.title)}</span>
             <div class="welcome-token-list">
               ${group.tokens.map((token) => `
                 <button class="welcome-token-command" type="button" data-action="insert-welcome-token" data-token="${escapeAttribute(token.value)}" title="${escapeAttribute(token.value)}を挿入">
                   <code>${escapeHtml(token.value)}</code>
-                  <span>${escapeHtml(token.description)}</span>
+                  <span>${escapeHtml(isLeave ? token.description.replaceAll("参加した", "退出した") : token.description)}</span>
                 </button>
               `).join("")}
             </div>
@@ -14788,14 +14806,19 @@ function updateAutoRuleField(target) {
   render();
 }
 
+function currentMemberMessageKey() {
+  return activeSettingsPage().id === "leave-message" ? "leave_message" : "welcome_message";
+}
+
 function updateWelcomeMessageField(target, options = { renderAfter: true }) {
   if (!state.featureSettings) {
     return;
   }
   const field = target.dataset.welcomeMessageField;
   const value = target instanceof HTMLInputElement && target.type === "checkbox" ? target.checked : target.value;
-  state.featureSettings.welcome_message = {
-    ...normalizeWelcomeMessageSettings(state.featureSettings.welcome_message),
+  const key = currentMemberMessageKey();
+  state.featureSettings[key] = {
+    ...normalizeWelcomeMessageSettings(state.featureSettings[key]),
     [field]: value,
   };
   updateDirtyState("features");
@@ -14811,13 +14834,14 @@ function insertWelcomeMessageToken(token) {
     return;
   }
   const textarea = root.querySelector('[data-welcome-message-field="message"]');
-  const currentMessage = normalizeWelcomeMessageSettings(state.featureSettings.welcome_message).message;
+  const key = currentMemberMessageKey();
+  const currentMessage = normalizeWelcomeMessageSettings(state.featureSettings[key]).message;
   const currentValue = textarea instanceof HTMLTextAreaElement ? textarea.value : currentMessage;
   const selectionStart = textarea instanceof HTMLTextAreaElement ? textarea.selectionStart : currentValue.length;
   const selectionEnd = textarea instanceof HTMLTextAreaElement ? textarea.selectionEnd : selectionStart;
   const nextValue = `${currentValue.slice(0, selectionStart)}${token}${currentValue.slice(selectionEnd)}`.slice(0, 1900);
-  state.featureSettings.welcome_message = {
-    ...normalizeWelcomeMessageSettings(state.featureSettings.welcome_message),
+  state.featureSettings[key] = {
+    ...normalizeWelcomeMessageSettings(state.featureSettings[key]),
     message: nextValue,
   };
   if (textarea instanceof HTMLTextAreaElement) {
@@ -14835,7 +14859,7 @@ function refreshWelcomeMessageStatus() {
   if (!card) {
     return;
   }
-  const settings = normalizeWelcomeMessageSettings(state.featureSettings?.welcome_message);
+  const settings = normalizeWelcomeMessageSettings(state.featureSettings?.[currentMemberMessageKey()]);
   const selectedChannel = state.ttsOptions?.text_channels?.find((channel) => channel.id === settings.channel_id);
   const enabled = Boolean(settings.enabled && settings.channel_id && settings.message);
   const status = card.querySelector("[data-welcome-message-status]");
